@@ -1,0 +1,328 @@
+version: 1
+# Build manifest for the Actuarial Workbench derived data product.
+# Each object binds a template (accelerator-owned) to the customer's approved
+# conformance tables. Rendered by assets/renderer/render.py, deployed in
+# depends_on order by the derived-build skill.
+#
+# object_type: dynamic_table | table | view | semantic_view | agent | script
+# consumes:    canonical element / relationship IDs the template resolves
+# readiness:   contract IDs that must be APPROVED before this object can build
+# params:      refresh_mode / target_lag / risk_score_anchor / phase
+
+objects:
+  # ---- Incremental fact layer (reads the mapped core; enables CHANGE_TRACKING) ----
+  - object_name: DT_MEMBER_MONTHS
+    object_type: dynamic_table
+    template: dt_member_months.sql.j2
+    grain: "member x eligibility month (PMPM denominator)"
+    depends_on: []
+    consumes:
+      elements: [MM_MEMBER_ID, MM_ELIGIBILITY_MONTH, MM_MEMBER_MONTH_FRACTION,
+                 MM_LINE_OF_BUSINESS, MM_PLAN_ID, MM_PHARMACY_COVERAGE_FLAG, MM_FUNDING_ARRANGEMENT]
+      relationships: []
+    readiness: [MM_MEMBER_ID, MM_ELIGIBILITY_MONTH, MM_MEMBER_MONTH_FRACTION, MM_LINE_OF_BUSINESS]
+    params:
+      refresh_mode: INCREMENTAL
+      target_lag: DOWNSTREAM
+
+  - object_name: DT_MED_CLAIM_STG
+    object_type: dynamic_table
+    template: dt_med_claim_stg.sql.j2
+    grain: "medical claim line: materialized incurred_month + paid_month + service_category + LOB (equality-join ready)"
+    depends_on: []
+    consumes:
+      elements: [MCL_CLAIM_ID, MCL_SERVICE_DATE, MCL_PLACE_OF_SERVICE_CODE, MCL_ALLOWED_AMOUNT, MCL_PAID_AMOUNT,
+                 MCL_UNITS_OF_SERVICE, MCH_CLAIM_ID, MCH_MEMBER_ID, MCH_CLAIM_PAID_DATE, RPOS_PLACE_OF_SERVICE_CODE,
+                 RPOS_SETTING_TYPE, RPOS_INPATIENT_FLAG, MM_MEMBER_ID, MM_ELIGIBILITY_MONTH, MM_LINE_OF_BUSINESS]
+      relationships: [MCL__MCH, MCL_POS__POSREF, MCH_MBR__MM]
+    readiness: [MCH_CLAIM_PAID_DATE, MCL_SERVICE_DATE, MCL_PAID_AMOUNT]
+    params:
+      refresh_mode: INCREMENTAL
+      target_lag: DOWNSTREAM
+
+  - object_name: DT_RX_CLAIM_STG
+    object_type: dynamic_table
+    template: dt_rx_claim_stg.sql.j2
+    grain: "pharmacy claim: materialized incurred(fill)_month + paid_month + rx category + LOB"
+    depends_on: []
+    consumes:
+      elements: [PHCLM_MEMBER_ID, PHCLM_FILL_DATE, PHCLM_PAID_DATE, PHCLM_PAID_AMOUNT, PHCLM_ALLOWED_AMOUNT,
+                 PHCLM_DAYS_SUPPLY, PHCLM_REVERSAL_FLAG, PHCLM_SPECIALTY_DRUG_FLAG, PHCLM_GENERIC_INDICATOR,
+                 MM_MEMBER_ID, MM_ELIGIBILITY_MONTH, MM_LINE_OF_BUSINESS]
+      relationships: [PHCLM_MBR__MM]
+    readiness: [PHCLM_FILL_DATE, PHCLM_PAID_DATE, PHCLM_PAID_AMOUNT, PHCLM_REVERSAL_FLAG]
+    params:
+      refresh_mode: INCREMENTAL
+      target_lag: DOWNSTREAM
+
+  - object_name: DT_PAID_FACT
+    object_type: dynamic_table
+    template: dt_paid_fact.sql.j2
+    grain: "LOB x constituent x service_category x incurred_month x paid_month (medical + Rx paid fact)"
+    depends_on: [DT_MED_CLAIM_STG, DT_RX_CLAIM_STG]
+    consumes:
+      elements: []
+      relationships: []
+    readiness: []
+    params:
+      refresh_mode: INCREMENTAL   # simple materialized GROUP BY keys from staging -> incrementalizable
+      target_lag: DOWNSTREAM
+
+  # ---- Leaf incremental mart ----
+  - object_name: DT_PMPM_HISTORY
+    object_type: dynamic_table
+    template: dt_pmpm_history.sql.j2
+    grain: "LOB x constituent x service_category x incurred_month (allowed/paid PMPM + utilization)"
+    depends_on: [DT_PAID_FACT, DT_MEMBER_MONTHS]
+    consumes:
+      elements: []
+      relationships: []
+    readiness: []
+    params:
+      refresh_mode: INCREMENTAL
+      target_lag: "1 hour"
+
+  # ---- Large-claim pooling (claimant-month totals -> excess over pooling point) ----
+  - object_name: DT_CLAIM_TOTALS
+    object_type: dynamic_table
+    template: dt_claim_totals.sql.j2
+    grain: "member x constituent x incurred_month claimant paid totals (pooling base)"
+    depends_on: [DT_MED_CLAIM_STG, DT_RX_CLAIM_STG]
+    consumes:
+      elements: []
+      relationships: []
+    readiness: []
+    params:
+      refresh_mode: INCREMENTAL
+      target_lag: "1 hour"
+  - object_name: V_LARGE_CLAIM_POOL
+    object_type: view
+    template: v_large_claim_pool.sql.j2
+    grain: "LOB x constituent x incurred_month: pooled excess over config pooling_point"
+    depends_on: [DT_CLAIM_TOTALS, DT_MEMBER_MONTHS]
+    consumes:
+      elements: []
+
+  # ---- Full-refresh RAF (whole-LOB normalization -> cannot incrementalize) ----
+  - object_name: DT_MEMBER_RISK_SCORE
+    object_type: dynamic_table
+    template: dt_member_risk_score.sql.j2
+    grain: "member: derived normalized RAF (concurrent cost-experience proxy)"
+    depends_on: [DT_MEMBER_MONTHS]
+    consumes:
+      elements: [MCH_MEMBER_ID, MCH_TOTAL_ALLOWED_AMOUNT, PHCLM_MEMBER_ID, PHCLM_ALLOWED_AMOUNT, PHCLM_PAID_AMOUNT, PHCLM_REVERSAL_FLAG]
+      relationships: []
+    readiness: []
+    optional_logical_objects: [MEMBER_ENROLLMENT]
+    params:
+      refresh_mode: FULL
+      target_lag: "24 hours"
+      risk_score_anchor: { "Medicare Advantage": 1.15, "default": 1.00 }
+
+  # ---- On-read views (always current; anchor censoring) ----
+  - object_name: V_CLAIM_TRIANGLE
+    object_type: view
+    template: v_claim_triangle.sql.j2
+    grain: "incurred_month x development-lag cumulative paid, censored at DEMO_CLOCK anchor"
+    depends_on: [DT_PAID_FACT]
+    consumes:
+      elements: [DEMO_ANCHOR_MONTH]
+
+  - object_name: V_IBNR_COMPLETION
+    object_type: view
+    template: v_ibnr_completion.sql.j2
+    grain: "incurred_month x completion-factor IBNR (paid-to-date / effective CF -> ultimate & IBNR); consumes RESERVE_CF_OVERRIDE"
+    depends_on: [DT_PAID_FACT, RESERVE_CF_OVERRIDE]
+    consumes:
+      elements: [DEMO_ANCHOR_MONTH, CF_BENEFIT_TYPE, CF_LAG_MONTHS, CF_COMPLETION_FACTOR]
+
+  # ---- Study: completion-factor trend (decomposition + projection) ----
+  - object_name: V_TREND_COMPLETED
+    object_type: view
+    template: v_trend_completed.sql.j2
+    grain: "LOB x constituent x incurred_month: completed-to-ultimate PMPM base (reuses V_IBNR_COMPLETION)"
+    depends_on: [V_IBNR_COMPLETION, DT_MEMBER_MONTHS]
+    consumes:
+      elements: []
+  - object_name: V_TREND_DECOMP
+    object_type: view
+    template: v_trend_decomp.sql.j2
+    grain: "LOB x constituent x service_category x incurred_month: YoY freq x severity decomposition (experience exhibit)"
+    depends_on: [DT_PMPM_HISTORY]
+    consumes:
+      elements: []
+  - object_name: V_TREND_SELECTED
+    object_type: view
+    template: v_trend_selected.sql.j2
+    grain: "LOB x constituent: log-linear annualized trend (freq/severity) + backtest MAPE"
+    depends_on: [V_TREND_COMPLETED, DT_PMPM_HISTORY]
+    consumes:
+      elements: []
+  - object_name: V_TREND_PROJECTION
+    object_type: view
+    template: v_trend_projection.sql.j2
+    grain: "LOB x constituent: trailing-12 base projected by selected trend for config.trend_projection_years"
+    depends_on: [V_TREND_SELECTED, V_TREND_COMPLETED]
+    consumes:
+      elements: []
+  - object_name: V_TREND_SUMMARY
+    object_type: view
+    template: v_trend_summary.sql.j2
+    grain: "LOB x constituent: trend build-up rows (base + util + unit cost + mix + large-claim norm)"
+    depends_on: [V_TREND_PROJECTION, V_TREND_SELECTED, V_LARGE_CLAIM_POOL]
+    consumes:
+      elements: []
+
+  # ---- Multi-method reserving (Option 1: pure-SQL). UDTF = read; proc = write ----
+  - object_name: TF_RESERVE_BY_METHOD
+    object_type: function
+    template: tf_reserve_by_method.sql.j2
+    grain: "table function: IBNR/ultimate by method (CHAIN_LADDER | BORNHUETTER_FERGUSON | CAPE_COD) x runtime params"
+    depends_on: [V_CLAIM_TRIANGLE, DT_MEMBER_MONTHS]
+    consumes:
+      elements: []
+    readiness: []
+  - object_name: DT_RESERVE_BY_METHOD
+    object_type: dynamic_table
+    template: dt_reserve_by_method.sql.j2
+    grain: "chain-ladder reserve snapshot at default params (fast reads)"
+    depends_on: [TF_RESERVE_BY_METHOD]
+    params:
+      refresh_mode: FULL
+      target_lag: "1 hour"
+  - object_name: SP_SAVE_RESERVE_ESTIMATE
+    object_type: procedure
+    template: sp_save_reserve_estimate.sql.j2
+    grain: "persist a chosen reserving run into RESERVE_ESTIMATE (valuation snapshot -> A/E)"
+    depends_on: [TF_RESERVE_BY_METHOD, RESERVE_ESTIMATE]
+
+  - object_name: V_RESERVE_ROLLFORWARD
+    object_type: view
+    template: v_reserve_rollforward.sql.j2
+    grain: "valuation_month x LOB x constituent: roll-forward + booked components + Reserve-vs-GL tie-out"
+    depends_on: [DT_PAID_FACT, V_IBNR_COMPLETION]
+    consumes:
+      elements: [GL_VALUATION_MONTH, GL_LINE_OF_BUSINESS, GL_CONSTITUENT, GL_BOOKED_RESERVE_TOTAL,
+                 GL_CASE_RESERVE, GL_IBNP_RESERVE, GL_IBNR_BOOKED, GL_LAE_RESERVE, GL_PFAD_MARGIN]
+    optional_logical_objects: [BOOKED_RESERVE]
+
+  - object_name: V_ACTUAL_TO_EXPECTED
+    object_type: view
+    template: v_actual_to_expected.sql.j2
+    grain: "lob x constituent x incurred_month: A/E from real paid-date censoring (current vs prior valuation); no saved snapshots required"
+    depends_on: [V_IBNR_COMPLETION, DT_PAID_FACT]
+    consumes:
+      elements: [DEMO_ANCHOR_MONTH, CF_BENEFIT_TYPE, CF_LAG_MONTHS, CF_COMPLETION_FACTOR]
+
+  # ---- Price: pricing input + bid checks ----
+  - object_name: V_PRICING_INPUT
+    object_type: view
+    template: v_pricing_input.sql.j2
+    grain: "LOB x constituent x plan_year: credibility-blended, trended, RAF-normalized base for rate build-up"
+    depends_on: [V_TREND_PROJECTION, DT_MEMBER_MONTHS, DT_MEMBER_RISK_SCORE]
+    consumes:
+      elements: []
+  - object_name: V_BID_CHECKS
+    object_type: view
+    template: v_bid_checks.sql.j2
+    grain: "LOB x constituent x plan_year: bid/URRT/BPT validation flags (PASS/WARN/FAIL)"
+    depends_on: [V_PRICING_INPUT, V_TREND_SELECTED, RATE_BUILDUP]
+    consumes:
+      elements: []
+
+  # ---- Workbench system-of-record (transactional; app writes via SQL API) ----
+  - object_name: WORK_PAPER
+    object_type: table
+    template: work_paper.sql.j2
+    grain: "one work paper (versioned; DRAFT/REVIEW/SIGNED/FILED)"
+    depends_on: []
+  - object_name: ASSUMPTION_LEDGER
+    object_type: table
+    template: assumption_ledger.sql.j2
+    grain: "one assumption/override with source + rationale + author"
+    depends_on: []
+  - object_name: RESERVE_ESTIMATE
+    object_type: table
+    template: reserve_estimate.sql.j2
+    grain: "reserve estimate by valuation_date x incurred_month (also A/E prior-estimate snapshot)"
+    depends_on: []
+  - object_name: RATE_BUILDUP
+    object_type: table
+    template: rate_buildup.sql.j2
+    grain: "one rate build-up step per work paper"
+    depends_on: []
+  - object_name: RESERVE_CF_OVERRIDE
+    object_type: table
+    template: reserve_cf_override.sql.j2
+    grain: "actuary completion-factor override per LOB x constituent x incurred_month (consumed by V_IBNR_COMPLETION)"
+    depends_on: []
+  - object_name: SP_APPLY_CF_OVERRIDE
+    object_type: procedure
+    template: sp_apply_cf_override.sql.j2
+    grain: "write a CF override + mirror an ASSUMPTION_LEDGER audit row (atomic)"
+    depends_on: [RESERVE_CF_OVERRIDE, ASSUMPTION_LEDGER]
+
+  # ---- Work-paper lifecycle (write actions; app calls via SQL API) ----
+  - object_name: WORK_PAPER_EVENT
+    object_type: table
+    template: work_paper_event.sql.j2
+    grain: "append-only work-paper lifecycle audit trail (ASOP 41)"
+    depends_on: []
+  - object_name: SP_CREATE_WORK_PAPER
+    object_type: procedure
+    template: sp_create_work_paper.sql.j2
+    grain: "create a work paper (DRAFT, v1) + CREATE event"
+    depends_on: [WORK_PAPER, WORK_PAPER_EVENT]
+  - object_name: SP_BRANCH_WORK_PAPER
+    object_type: procedure
+    template: sp_branch_work_paper.sql.j2
+    grain: "branch a work paper: clone header + deep-copy assumptions/rate/overrides"
+    depends_on: [WORK_PAPER, WORK_PAPER_EVENT, ASSUMPTION_LEDGER, RATE_BUILDUP, RESERVE_CF_OVERRIDE]
+  - object_name: SP_TRANSITION_WORK_PAPER
+    object_type: procedure
+    template: sp_transition_work_paper.sql.j2
+    grain: "status transition DRAFT->REVIEW->SIGNED->FILED; sign freezes a RESERVE_ESTIMATE snapshot; logs event"
+    depends_on: [WORK_PAPER, WORK_PAPER_EVENT, RESERVE_ESTIMATE, TF_RESERVE_BY_METHOD]
+  - object_name: SP_LOG_ASSUMPTION
+    object_type: procedure
+    template: sp_log_assumption.sql.j2
+    grain: "log a general assumption/override to ASSUMPTION_LEDGER"
+    depends_on: [ASSUMPTION_LEDGER]
+  - object_name: SP_SAVE_RATE_BUILDUP
+    object_type: procedure
+    template: sp_save_rate_buildup.sql.j2
+    grain: "atomically replace rate build-up steps from a JSON array"
+    depends_on: [RATE_BUILDUP]
+  - object_name: SP_DELETE_WORK_PAPER
+    object_type: procedure
+    template: sp_delete_work_paper.sql.j2
+    grain: "delete a DRAFT work paper + its child rows (guarded to DRAFT; keeps a DELETE tombstone event)"
+    depends_on: [WORK_PAPER, WORK_PAPER_EVENT, ASSUMPTION_LEDGER, RATE_BUILDUP, RESERVE_CF_OVERRIDE, RESERVE_ESTIMATE]
+
+  # ---- Semantic layer + trace agent ----
+  - object_name: SV_ACTUARIAL_INTELLIGENCE
+    object_type: semantic_view
+    template: sv_actuarial_intelligence.sql.j2
+    grain: "multi-fact semantic layer over reserving, trend, pricing, pooling and RAF marts (Cortex Analyst / trace agent)"
+    depends_on: [DT_PMPM_HISTORY, V_IBNR_COMPLETION, DT_RESERVE_BY_METHOD, V_RESERVE_ROLLFORWARD, V_ACTUAL_TO_EXPECTED, V_LARGE_CLAIM_POOL, V_TREND_DECOMP, V_TREND_SELECTED, V_TREND_PROJECTION, V_TREND_SUMMARY, V_PRICING_INPUT, V_BID_CHECKS, DT_MEMBER_RISK_SCORE]
+
+  - object_name: AGT_ACTUARIAL_WORKBENCH
+    object_type: agent
+    template: agt_actuarial_workbench.sql.j2
+    grain: "derivation/trace agent (Cortex Analyst over SV; explain-only, no action dispatch)"
+    depends_on: [SV_ACTUARIAL_INTELLIGENCE]
+
+  # ---- Phase 4 (app-deploy): least-privilege read grants for the app role ----
+  - object_name: GRANT_APP_ACCESS
+    object_type: script
+    template: app_grants.sql.j2
+    grain: "GRANT USAGE + SELECT on derived views/SV/agent to cfg.app_role"
+    phase: app-deploy
+    depends_on: [SV_ACTUARIAL_INTELLIGENCE, AGT_ACTUARIAL_WORKBENCH]
+
+# ---- Phase 4 (app-deploy): the Next.js App Runtime workbench app ----
+# The workbench app is vendored under assets/app/ and deployed by the app-deploy
+# skill via `snow app deploy` (NOT render.py). Its two cfg-driven templates
+# (assets/app/snowflake.yml.j2, assets/app/lib/app_target.ts.j2) are rendered
+# from config.json at deploy time. It is intentionally not a build_manifest
+# object because render.py only builds the SQL derived layer.

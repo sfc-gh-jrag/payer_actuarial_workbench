@@ -1,0 +1,15 @@
+CREATE TABLE IF NOT EXISTS {{ target('WORK_PAPER') }} (
+  work_paper_id   VARCHAR(40)  NOT NULL PRIMARY KEY,
+  name            VARCHAR(200),
+  mode            VARCHAR(20),
+  lob             VARCHAR(40), constituent VARCHAR(20), segment VARCHAR(40),
+  valuation_date  DATE,
+  status          VARCHAR(20)  DEFAULT 'DRAFT',
+  version_no      NUMBER       DEFAULT 1,
+  parent_id       VARCHAR(40),
+  signed_by       VARCHAR(120), signed_at TIMESTAMP_NTZ,
+  filed_at        TIMESTAMP_NTZ,
+  created_by      VARCHAR(120), created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  updated_at      TIMESTAMP_NTZ
+) CLUSTER BY (mode, valuation_date) DATA_RETENTION_TIME_IN_DAYS = 30
+  COMMENT = 'Workbench system-of-record: one versioned work paper (DRAFT/REVIEW/SIGNED/FILED). Lifecycle via SP_CREATE/BRANCH/TRANSITION_WORK_PAPER.';

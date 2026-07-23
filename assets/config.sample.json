@@ -1,0 +1,43 @@
+{
+  "target_database": "<YOUR_DERIVED_DATA_PRODUCT_DB>",
+  "target_schema": "ACTUARIAL",
+  "warehouse": "<YOUR_REFRESH_WAREHOUSE>",
+  "target_lag": "1 hour",
+  "risk_score_anchor": {
+    "Medicare Advantage": 1.15,
+    "default": 1.0
+  },
+  "default_reserving": {
+    "tail": 1.004,
+    "pooling_point": 250000,
+    "apriori_pmpm": 0
+  },
+  "max_completion_lag": 12,
+  "trend_projection_years": 2.0,
+  "trend_fit_window_months": 24,
+  "trend_min_maturity_months": 6,
+  "ae_lookback_months": 3,
+  "mlr_floor": 0.85,
+  "trend_reasonable_band": [
+    0.0,
+    0.2
+  ],
+  "full_credibility_member_months": 12000,
+  "target_raf": 1.0,
+  "insight_format_model": "claude-opus-4-8",
+  "cardinality_profile": {
+    "PHCLM_MBR__MM": 1,
+    "MCH_MBR__MM": 1
+  },
+  "app_name": "ACTUARIAL_WORKBENCH",
+  "app_role": "<YOUR_APP_OWNER_ROLE>",
+  "app_database": "<YOUR_DERIVED_DATA_PRODUCT_DB>",
+  "app_schema": "ACTUARIAL",
+  "app_warehouse": "<YOUR_REFRESH_WAREHOUSE>",
+  "app_compute_pool": "<YOUR_APP_COMPUTE_POOL>",
+  "build_eai": "<EXTERNAL_ACCESS_INTEGRATION_FOR_CONTAINER_BUILD>",
+  "code_workspace": "<YOUR_DERIVED_DATA_PRODUCT_DB>.ACTUARIAL.APPS",
+  "app_valuation_date": "YYYY-MM-DD",
+  "app_signing_actuary": "Actuary Name",
+  "app_signing_actuary_initials": "AN"
+}

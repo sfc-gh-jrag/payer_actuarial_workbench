@@ -1,0 +1,19 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_SAVE_RATE_BUILDUP') }}(
+  P_WORK_PAPER_ID STRING, P_LOB STRING, P_CONSTITUENT STRING, P_PLAN_YEAR NUMBER, P_STEPS_JSON STRING)
+  RETURNS STRING LANGUAGE SQL
+  COMMENT = 'Atomically replace the rate build-up steps for a work paper / LOB / constituent / plan_year from a JSON array of {step_seq, component, value, basis}.'
+AS
+$$
+BEGIN
+  DELETE FROM {{ target('RATE_BUILDUP') }}
+  WHERE work_paper_id = :P_WORK_PAPER_ID AND lob = :P_LOB AND constituent = :P_CONSTITUENT AND plan_year = :P_PLAN_YEAR;
+
+  INSERT INTO {{ target('RATE_BUILDUP') }}
+    (work_paper_id, lob, constituent, plan_year, step_seq, component, value, basis)
+  SELECT :P_WORK_PAPER_ID, :P_LOB, :P_CONSTITUENT, :P_PLAN_YEAR,
+         f.value:step_seq::NUMBER, f.value:component::STRING, f.value:value::FLOAT, f.value:basis::STRING
+  FROM LATERAL FLATTEN(input => PARSE_JSON(:P_STEPS_JSON)) f;
+
+  RETURN 'saved ' || SQLROWCOUNT || ' rate build-up steps';
+END;
+$$;

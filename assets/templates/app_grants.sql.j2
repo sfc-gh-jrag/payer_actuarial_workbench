@@ -1,0 +1,21 @@
+-- Phase 4 (app-deploy): least-privilege grants for the app's execution role.
+-- Writes go through owner's-rights procedures, so the app role needs only
+-- SELECT on tables/views/DTs + USAGE on functions/procedures. ALL + FUTURE
+-- grants keep this current as the accelerator adds objects.
+GRANT USAGE ON DATABASE {{ cfg.target_database }} TO ROLE {{ cfg.app_role }};
+GRANT USAGE ON SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+
+GRANT SELECT ON ALL TABLES        IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT SELECT ON FUTURE TABLES     IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT SELECT ON ALL VIEWS         IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT SELECT ON FUTURE VIEWS      IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT SELECT ON ALL DYNAMIC TABLES    IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT SELECT ON FUTURE DYNAMIC TABLES IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT USAGE ON ALL FUNCTIONS      IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT USAGE ON FUTURE FUNCTIONS   IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT USAGE ON ALL PROCEDURES     IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+GRANT USAGE ON FUTURE PROCEDURES  IN SCHEMA {{ cfg.target_database }}.{{ cfg.target_schema }} TO ROLE {{ cfg.app_role }};
+
+-- Semantic view (Cortex Analyst) for the trace panel.
+GRANT SELECT ON SEMANTIC VIEW {{ target('SV_ACTUARIAL_INTELLIGENCE') }} TO ROLE {{ cfg.app_role }};
+-- Agent access (AGT_ACTUARIAL_WORKBENCH) is granted per Cortex Agent RBAC at app-deploy.

@@ -1,0 +1,7 @@
+CREATE OR REPLACE VIEW {{ target('DT_RESERVE_BY_METHOD') }}
+  COMMENT = 'Chain-ladder reserve at default params (from config.default_reserving) for fast reads. View over the UDTF (triangle is always-current).'
+AS SELECT * FROM TABLE({{ target('TF_RESERVE_BY_METHOD') }}(
+  'CHAIN_LADDER',
+  {{ cfg.default_reserving.tail }}::FLOAT,
+  {{ cfg.default_reserving.pooling_point }}::FLOAT,
+  {{ cfg.default_reserving.apriori_pmpm }}::FLOAT));

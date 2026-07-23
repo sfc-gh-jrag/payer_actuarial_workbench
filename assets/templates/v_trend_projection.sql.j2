@@ -1,0 +1,23 @@
+CREATE OR REPLACE VIEW {{ target('V_TREND_PROJECTION') }}
+  COMMENT = 'Trend projection per LOB x constituent: trailing-12 completed-PMPM base projected forward by the modeled trend for config.trend_projection_years. Feeds the Price rate build-up. On-read.'
+AS
+WITH base AS (
+  SELECT line_of_business, constituent, AVG(completed_pmpm) AS base_pmpm
+  FROM (
+    SELECT line_of_business, constituent, completed_pmpm,
+           ROW_NUMBER() OVER (PARTITION BY line_of_business, constituent ORDER BY incurred_month DESC) AS rn
+    FROM {{ target('V_TREND_COMPLETED') }}
+    WHERE completed_pmpm > 0 AND lag_from_anchor >= {{ cfg.trend_min_maturity_months }}
+  )
+  WHERE rn <= 12
+  GROUP BY 1,2
+)
+SELECT b.line_of_business, b.constituent,
+       b.base_pmpm,
+       s.annualized_trend                                                              AS selected_trend,
+       {{ cfg.trend_projection_years }}                                                AS projection_years,
+       b.base_pmpm * POWER(1 + COALESCE(s.annualized_trend,0), {{ cfg.trend_projection_years }}) AS projected_pmpm,
+       s.freq_trend, s.severity_trend, s.backtest_mape
+FROM base b
+LEFT JOIN {{ target('V_TREND_SELECTED') }} s
+  ON s.line_of_business = b.line_of_business AND s.constituent = b.constituent;

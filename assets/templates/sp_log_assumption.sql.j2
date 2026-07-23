@@ -1,0 +1,17 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_LOG_ASSUMPTION') }}(
+  P_WORK_PAPER_ID STRING, P_LEVER STRING, P_SEGMENT STRING, P_VALUE FLOAT, P_UNIT STRING,
+  P_SOURCE_BASIS STRING, P_RATIONALE STRING, P_IS_JUDGMENT BOOLEAN, P_AUTHOR STRING)
+  RETURNS STRING LANGUAGE SQL
+  COMMENT = 'Log an assumption/override (trend, pricing lever, etc.) to ASSUMPTION_LEDGER (ASOP 41). Returns the new ledger_id.'
+AS
+$$
+DECLARE
+  V_ID STRING DEFAULT UUID_STRING();
+BEGIN
+  INSERT INTO {{ target('ASSUMPTION_LEDGER') }}
+    (ledger_id, work_paper_id, lever, segment, value, unit, source_basis, rationale, is_judgment, author)
+  VALUES
+    (:V_ID, :P_WORK_PAPER_ID, :P_LEVER, :P_SEGMENT, :P_VALUE, :P_UNIT, :P_SOURCE_BASIS, :P_RATIONALE, :P_IS_JUDGMENT, :P_AUTHOR);
+  RETURN :V_ID;
+END;
+$$;

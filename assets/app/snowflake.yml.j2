@@ -1,0 +1,32 @@
+definition_version: "2"
+
+entities:
+  actuarial_workbench:
+    type: snowflake-app
+    identifier:
+      name: {{ cfg.app_name }}
+      database: {{ cfg.app_database }}
+      schema: {{ cfg.app_schema }}
+    artifacts:
+      - src: ./*
+        dest: ./
+        ignore:
+          - node_modules
+          - .env*
+          - __pycache__
+          - "*.pyc"
+          - "*.tsbuildinfo"
+          - .next
+          - .git
+          - snowflake.log
+          - snowflake.yml.j2
+          - lib/app_target.ts.j2
+
+    query_warehouse: {{ cfg.app_warehouse }}
+    build_eai:
+      name: {{ cfg.build_eai }}
+{% if cfg.get('app_compute_pool') and not cfg.get('app_compute_pool').startswith('<') %}    build_compute_pool:
+      name: {{ cfg.app_compute_pool }}
+    service_compute_pool:
+      name: {{ cfg.app_compute_pool }}
+{% endif %}    code_workspace: {{ cfg.code_workspace }}

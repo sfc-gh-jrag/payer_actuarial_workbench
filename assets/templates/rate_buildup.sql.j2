@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS {{ target('RATE_BUILDUP') }} (
+  work_paper_id VARCHAR(40) NOT NULL,
+  lob VARCHAR(40), constituent VARCHAR(20), plan_year NUMBER,
+  step_seq NUMBER, component VARCHAR(80), value FLOAT, basis VARCHAR(200),
+  created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+) CLUSTER BY (work_paper_id, step_seq)
+  COMMENT = 'Rate build-up steps per work paper (base -> credibility -> trend -> adjustments -> required PMPM).';

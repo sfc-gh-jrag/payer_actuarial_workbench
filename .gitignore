@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+.next/
+bindings/
+rendered/
+preflight/
+
+# Per-customer config — each customer creates their own from assets/config.sample.json
+config.json

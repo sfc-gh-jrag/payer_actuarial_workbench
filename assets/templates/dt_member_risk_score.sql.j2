@@ -1,0 +1,44 @@
+CREATE OR REPLACE DYNAMIC TABLE {{ target('DT_MEMBER_RISK_SCORE') }}
+  TARGET_LAG = '{{ params.target_lag }}'
+  WAREHOUSE = {{ warehouse }}
+  REFRESH_MODE = {{ params.refresh_mode }}
+  COMMENT = 'Derived normalized RAF (concurrent cost-experience proxy). FULL refresh: whole-LOB normalization. Not a CMS-certified risk score.'
+AS
+WITH mm AS (
+  SELECT member_id, ANY_VALUE(line_of_business) AS lob, SUM(member_month_fraction) AS member_months
+  FROM {{ target('DT_MEMBER_MONTHS') }} GROUP BY 1
+),
+med AS (
+  SELECT h.{{ c('MCH_MEMBER_ID') }} AS member_id, SUM(h.{{ c('MCH_TOTAL_ALLOWED_AMOUNT') }}) AS a
+  FROM {{ tbl('MCH_MEMBER_ID') }} h GROUP BY 1
+),
+rx AS (
+  SELECT r.{{ c('PHCLM_MEMBER_ID') }} AS member_id,
+         SUM(COALESCE(r.{{ c('PHCLM_ALLOWED_AMOUNT') }}, r.{{ c('PHCLM_PAID_AMOUNT') }})) AS a
+  FROM {{ tbl('PHCLM_MEMBER_ID') }} r
+  WHERE NOT ({{ canon('PHCLM_REVERSAL_FLAG','r') }})
+  GROUP BY 1
+),
+base AS (
+  SELECT mm.member_id, mm.lob, mm.member_months,
+         COALESCE(med.a,0) AS medical_allowed, COALESCE(rx.a,0) AS rx_allowed,
+         (COALESCE(med.a,0)+COALESCE(rx.a,0))/NULLIF(mm.member_months,0) AS experience_pmpm
+  FROM mm LEFT JOIN med ON mm.member_id=med.member_id LEFT JOIN rx ON mm.member_id=rx.member_id
+),
+comp AS (
+  SELECT b.*,
+         POWER(experience_pmpm / NULLIF(AVG(experience_pmpm) OVER (PARTITION BY lob),0), 0.6) AS c,
+         CASE
+{%- for lob_name, lob_anchor in cfg.risk_score_anchor.items() if lob_name != 'default' %}
+           WHEN lob = '{{ lob_name }}' THEN {{ lob_anchor }}
+{%- endfor %}
+           ELSE {{ cfg.risk_score_anchor['default'] }}
+         END AS anchor
+  FROM base b
+)
+SELECT member_id, lob AS line_of_business, member_months, medical_allowed, rx_allowed,
+       ROUND(experience_pmpm,2) AS experience_pmpm,
+       LEAST(GREATEST(ROUND(c / NULLIF(AVG(c) OVER (PARTITION BY lob),0) * anchor, 3), 0.25), 8.0) AS risk_score_derived,
+       'Concurrent cost-experience proxy: (medical+Rx allowed) PMPM, ^0.6 compressed, LOB-normalized' AS risk_basis,
+       anchor AS normalized_to_mean
+FROM comp;

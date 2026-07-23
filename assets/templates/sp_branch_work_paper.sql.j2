@@ -1,0 +1,40 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_BRANCH_WORK_PAPER') }}(
+  P_SOURCE_ID STRING, P_NEW_NAME STRING, P_CREATED_BY STRING)
+  RETURNS STRING LANGUAGE SQL
+  COMMENT = 'Branch a work paper: clone the header (parent_id set, version_no+1, DRAFT) and DEEP-COPY its children (assumption ledger, rate build-up, CF overrides) under the new id. Returns the new work_paper_id.'
+AS
+$$
+DECLARE
+  V_NEW STRING DEFAULT UUID_STRING();
+BEGIN
+  -- header (carry attributes forward, new lineage node)
+  INSERT INTO {{ target('WORK_PAPER') }}
+    (work_paper_id, name, mode, lob, constituent, segment, valuation_date, status, version_no, parent_id, created_by, updated_at)
+  SELECT :V_NEW, :P_NEW_NAME, mode, lob, constituent, segment, valuation_date, 'DRAFT', version_no + 1, :P_SOURCE_ID, :P_CREATED_BY, CURRENT_TIMESTAMP()
+  FROM {{ target('WORK_PAPER') }} WHERE work_paper_id = :P_SOURCE_ID;
+
+  -- deep-copy assumption ledger
+  INSERT INTO {{ target('ASSUMPTION_LEDGER') }}
+    (ledger_id, work_paper_id, lever, segment, value, unit, source_basis, rationale, is_judgment, author)
+  SELECT UUID_STRING(), :V_NEW, lever, segment, value, unit, source_basis, rationale, is_judgment, author
+  FROM {{ target('ASSUMPTION_LEDGER') }} WHERE work_paper_id = :P_SOURCE_ID;
+
+  -- deep-copy rate build-up
+  INSERT INTO {{ target('RATE_BUILDUP') }}
+    (work_paper_id, lob, constituent, plan_year, step_seq, component, value, basis)
+  SELECT :V_NEW, lob, constituent, plan_year, step_seq, component, value, basis
+  FROM {{ target('RATE_BUILDUP') }} WHERE work_paper_id = :P_SOURCE_ID;
+
+  -- deep-copy CF overrides
+  INSERT INTO {{ target('RESERVE_CF_OVERRIDE') }}
+    (override_id, work_paper_id, line_of_business, constituent, incurred_month, override_cf, rationale, author, mapping_status)
+  SELECT UUID_STRING(), :V_NEW, line_of_business, constituent, incurred_month, override_cf, rationale, author, mapping_status
+  FROM {{ target('RESERVE_CF_OVERRIDE') }} WHERE work_paper_id = :P_SOURCE_ID;
+
+  INSERT INTO {{ target('WORK_PAPER_EVENT') }}
+    (event_id, work_paper_id, event_type, from_status, to_status, actor, note)
+  SELECT UUID_STRING(), :V_NEW, 'BRANCH', NULL, 'DRAFT', :P_CREATED_BY, 'Branched from ' || :P_SOURCE_ID;
+
+  RETURN :V_NEW;
+END;
+$$;

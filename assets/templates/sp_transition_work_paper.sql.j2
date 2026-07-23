@@ -1,0 +1,57 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_TRANSITION_WORK_PAPER') }}(
+  P_WORK_PAPER_ID STRING, P_TO_STATUS STRING, P_ACTOR STRING, P_NOTE STRING)
+  RETURNS STRING LANGUAGE SQL
+  COMMENT = 'Transition a work paper along DRAFT->REVIEW->SIGNED->FILED (REVIEW->DRAFT reopen allowed). On SIGNED, freezes a RESERVE_ESTIMATE snapshot. Every transition logs a WORK_PAPER_EVENT.'
+AS
+$$
+DECLARE
+  V_FROM    STRING;
+  V_VALDATE DATE;
+  V_VALID   BOOLEAN;
+  V_ETYPE   STRING;
+BEGIN
+  SELECT status, valuation_date INTO :V_FROM, :V_VALDATE
+  FROM {{ target('WORK_PAPER') }} WHERE work_paper_id = :P_WORK_PAPER_ID;
+
+  IF (V_FROM IS NULL) THEN
+    RETURN 'error: work paper not found';
+  END IF;
+
+  V_VALID := (:V_FROM = 'DRAFT'  AND :P_TO_STATUS = 'REVIEW')
+          OR (:V_FROM = 'REVIEW' AND :P_TO_STATUS = 'SIGNED')
+          OR (:V_FROM = 'REVIEW' AND :P_TO_STATUS = 'DRAFT')
+          OR (:V_FROM = 'SIGNED' AND :P_TO_STATUS = 'FILED');
+  IF (NOT V_VALID) THEN
+    RETURN 'error: invalid transition ' || :V_FROM || ' -> ' || :P_TO_STATUS;
+  END IF;
+
+  IF (:P_TO_STATUS = 'SIGNED') THEN
+    -- freeze the reserve at sign time (chain-ladder at config defaults)
+    INSERT INTO {{ target('RESERVE_ESTIMATE') }}
+      (work_paper_id, valuation_date, lob, constituent, service_category, incurred_month, method, paid_to_date, ultimate_incurred, ibnr, pmpm)
+    SELECT :P_WORK_PAPER_ID, :V_VALDATE, line_of_business, constituent, NULL, incurred_month, 'CHAIN_LADDER', paid_to_date, ultimate, ibnr, NULL
+    FROM TABLE({{ target('TF_RESERVE_BY_METHOD') }}('CHAIN_LADDER', {{ cfg.default_reserving.tail }}::FLOAT, {{ cfg.default_reserving.pooling_point }}::FLOAT, {{ cfg.default_reserving.apriori_pmpm }}::FLOAT));
+
+    UPDATE {{ target('WORK_PAPER') }}
+    SET status = 'SIGNED', signed_by = :P_ACTOR, signed_at = CURRENT_TIMESTAMP(), updated_at = CURRENT_TIMESTAMP()
+    WHERE work_paper_id = :P_WORK_PAPER_ID;
+    V_ETYPE := 'SIGN';
+  ELSEIF (:P_TO_STATUS = 'FILED') THEN
+    UPDATE {{ target('WORK_PAPER') }}
+    SET status = 'FILED', filed_at = CURRENT_TIMESTAMP(), updated_at = CURRENT_TIMESTAMP()
+    WHERE work_paper_id = :P_WORK_PAPER_ID;
+    V_ETYPE := 'FILE';
+  ELSE
+    UPDATE {{ target('WORK_PAPER') }}
+    SET status = :P_TO_STATUS, updated_at = CURRENT_TIMESTAMP()
+    WHERE work_paper_id = :P_WORK_PAPER_ID;
+    V_ETYPE := 'STATUS_CHANGE';
+  END IF;
+
+  INSERT INTO {{ target('WORK_PAPER_EVENT') }}
+    (event_id, work_paper_id, event_type, from_status, to_status, actor, note)
+  SELECT UUID_STRING(), :P_WORK_PAPER_ID, :V_ETYPE, :V_FROM, :P_TO_STATUS, :P_ACTOR, :P_NOTE;
+
+  RETURN 'transitioned ' || :V_FROM || ' -> ' || :P_TO_STATUS;
+END;
+$$;

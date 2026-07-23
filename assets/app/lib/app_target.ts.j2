@@ -1,0 +1,14 @@
+/**
+ * Data target for the deployed derived data product.
+ * RENDERED by the plugin app-deploy step from config.json — do not edit by hand.
+ */
+
+/** Fully-qualified schema of the deployed derived data product. */
+export const SCHEMA = "{{ cfg.target_database }}.{{ cfg.target_schema }}"
+
+/** Valuation anchor / DEMO_CLOCK for this book (censoring applied on-read). */
+export const VALUATION_DATE = "{{ cfg.app_valuation_date }}"
+
+/** Signing actuary attributed to writes (author / created_by / actor). */
+export const SIGNING_ACTUARY = "{{ cfg.app_signing_actuary }}"
+export const SIGNING_ACTUARY_INITIALS = "{{ cfg.app_signing_actuary_initials }}"

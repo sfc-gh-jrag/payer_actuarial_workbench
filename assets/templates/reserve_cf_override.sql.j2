@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS {{ target('RESERVE_CF_OVERRIDE') }} (
+  override_id     VARCHAR(40) NOT NULL PRIMARY KEY,
+  work_paper_id   VARCHAR(40),
+  line_of_business VARCHAR(40) NOT NULL,
+  constituent     VARCHAR(20) NOT NULL,
+  incurred_month  DATE NOT NULL,
+  override_cf     FLOAT NOT NULL,
+  rationale       VARCHAR(2000),
+  author          VARCHAR(120),
+  mapping_status  VARCHAR(20) DEFAULT 'APPROVED',
+  created_at      TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+) CLUSTER BY (line_of_business, constituent, incurred_month)
+  COMMENT = 'Actuary completion-factor overrides consumed by V_IBNR_COMPLETION (latest APPROVED per cell). Written by SP_APPLY_CF_OVERRIDE alongside the ASSUMPTION_LEDGER audit row.';

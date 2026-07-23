@@ -1,0 +1,19 @@
+CREATE OR REPLACE DYNAMIC TABLE {{ target('DT_CLAIM_TOTALS') }}
+  TARGET_LAG = {% if params.target_lag == 'DOWNSTREAM' %}DOWNSTREAM{% else %}'{{ params.target_lag }}'{% endif %}
+
+  WAREHOUSE = {{ warehouse }}
+  REFRESH_MODE = {{ params.refresh_mode }}
+  CLUSTER BY (constituent, incurred_month)
+  COMMENT = 'Claimant-month paid totals (member x constituent x incurred_month) over staging. Base for large-claim pooling. Materialized keys + simple GROUP BY -> incremental.'
+AS
+WITH stg AS (
+  SELECT member_id, constituent, incurred_month, paid_amt
+  FROM {{ target('DT_MED_CLAIM_STG') }}
+  UNION ALL
+  SELECT member_id, constituent, incurred_month, paid_amt
+  FROM {{ target('DT_RX_CLAIM_STG') }}
+)
+SELECT member_id, constituent, incurred_month,
+       SUM(paid_amt) AS claimant_paid
+FROM stg
+GROUP BY 1,2,3;

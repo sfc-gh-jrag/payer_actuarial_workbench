@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS {{ target('RESERVE_ESTIMATE') }} (
+  work_paper_id   VARCHAR(40),
+  valuation_date  DATE NOT NULL,
+  lob VARCHAR(40), constituent VARCHAR(20), service_category VARCHAR(80), incurred_month DATE,
+  method          VARCHAR(30),
+  paid_to_date FLOAT, ultimate_incurred FLOAT, ibnr FLOAT, pmpm FLOAT,
+  created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+) CLUSTER BY (valuation_date, lob, incurred_month) DATA_RETENTION_TIME_IN_DAYS = 90
+  COMMENT = 'Saved reserve estimates per valuation; doubles as the prior-estimate snapshot for actual-to-expected.';

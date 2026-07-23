@@ -1,0 +1,21 @@
+CREATE OR REPLACE VIEW {{ target('V_TREND_COMPLETED') }}
+  COMMENT = 'Completed-to-ultimate PMPM per LOB x constituent x incurred_month: ultimate_incurred (from V_IBNR_COMPLETION, i.e. the same completion factors that drive reserving) / member-months. Trend is measured on this mature-equivalent base, not raw immature paid. On-read.'
+AS
+WITH ult AS (
+  SELECT line_of_business, constituent, incurred_month, lag_from_anchor, completion_factor, paid_to_date, ultimate_incurred
+  FROM {{ target('V_IBNR_COMPLETION') }}
+),
+expo AS (
+  SELECT line_of_business, eligibility_month AS incurred_month, SUM(member_month_fraction) AS member_months
+  FROM {{ target('DT_MEMBER_MONTHS') }}
+  GROUP BY 1,2
+)
+SELECT u.line_of_business, u.constituent, u.incurred_month,
+       u.lag_from_anchor, u.completion_factor,
+       e.member_months,
+       u.paid_to_date                              AS paid_to_date,
+       u.ultimate_incurred                         AS ultimate_incurred,
+       u.paid_to_date      / NULLIF(e.member_months,0) AS paid_pmpm,
+       u.ultimate_incurred / NULLIF(e.member_months,0) AS completed_pmpm
+FROM ult u
+JOIN expo e ON e.line_of_business = u.line_of_business AND e.incurred_month = u.incurred_month;

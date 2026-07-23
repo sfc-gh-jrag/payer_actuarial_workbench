@@ -1,0 +1,32 @@
+CREATE OR REPLACE VIEW {{ target('V_IBNR_COMPLETION') }}
+  COMMENT = 'Completion-factor IBNR: paid-to-date / effective CF(benefit_type, lag) -> ultimate & IBNR by incurred month. Actuary overrides in RESERVE_CF_OVERRIDE (latest APPROVED per cell) supersede the reference curve. Always current.'
+AS
+WITH anchor AS (SELECT {{ c('DEMO_ANCHOR_MONTH') }} AS anchor_month FROM {{ tbl('DEMO_ANCHOR_MONTH') }}),
+ptd AS (
+  SELECT f.line_of_business, f.constituent, f.incurred_month,
+         DATEDIFF('month', f.incurred_month, a.anchor_month) AS lag_from_anchor,
+         SUM(f.paid_amt) AS paid_to_date
+  FROM {{ target('DT_PAID_FACT') }} f, anchor a
+  WHERE f.paid_month <= a.anchor_month
+  GROUP BY 1,2,3, DATEDIFF('month', f.incurred_month, a.anchor_month)
+),
+ovr AS (
+  SELECT line_of_business, constituent, incurred_month, override_cf
+  FROM {{ target('RESERVE_CF_OVERRIDE') }}
+  WHERE mapping_status = 'APPROVED'
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY line_of_business, constituent, incurred_month ORDER BY created_at DESC) = 1
+)
+SELECT p.line_of_business, p.constituent, p.incurred_month, p.lag_from_anchor, p.paid_to_date,
+       cf.{{ c('CF_COMPLETION_FACTOR') }}                                     AS reference_cf,
+       o.override_cf                                                          AS override_cf,
+       COALESCE(o.override_cf, cf.{{ c('CF_COMPLETION_FACTOR') }}, 1.0)       AS completion_factor,
+       IFF(o.override_cf IS NOT NULL, 'OVERRIDE', 'MODELED')                  AS cf_source,
+       p.paid_to_date / NULLIF(COALESCE(o.override_cf, cf.{{ c('CF_COMPLETION_FACTOR') }}, 1.0),0)                  AS ultimate_incurred,
+       p.paid_to_date / NULLIF(COALESCE(o.override_cf, cf.{{ c('CF_COMPLETION_FACTOR') }}, 1.0),0) - p.paid_to_date AS ibnr
+FROM ptd p
+LEFT JOIN {{ tbl('CF_BENEFIT_TYPE') }} cf
+  ON cf.{{ c('CF_BENEFIT_TYPE') }} = p.constituent
+ AND cf.{{ c('CF_LAG_MONTHS') }} = LEAST(p.lag_from_anchor, {{ cfg.max_completion_lag }})
+LEFT JOIN ovr o
+  ON o.line_of_business = p.line_of_business AND o.constituent = p.constituent AND o.incurred_month = p.incurred_month;

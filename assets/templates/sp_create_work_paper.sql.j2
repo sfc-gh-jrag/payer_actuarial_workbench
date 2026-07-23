@@ -1,0 +1,22 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_CREATE_WORK_PAPER') }}(
+  P_NAME STRING, P_MODE STRING, P_LOB STRING, P_CONSTITUENT STRING, P_SEGMENT STRING,
+  P_VALUATION_DATE DATE, P_CREATED_BY STRING)
+  RETURNS STRING LANGUAGE SQL
+  COMMENT = 'Create a new work paper (DRAFT, v1) + CREATE event. Returns the new work_paper_id.'
+AS
+$$
+DECLARE
+  V_ID STRING DEFAULT UUID_STRING();
+BEGIN
+  INSERT INTO {{ target('WORK_PAPER') }}
+    (work_paper_id, name, mode, lob, constituent, segment, valuation_date, status, version_no, created_by, updated_at)
+  VALUES
+    (:V_ID, :P_NAME, :P_MODE, :P_LOB, :P_CONSTITUENT, :P_SEGMENT, :P_VALUATION_DATE, 'DRAFT', 1, :P_CREATED_BY, CURRENT_TIMESTAMP());
+
+  INSERT INTO {{ target('WORK_PAPER_EVENT') }}
+    (event_id, work_paper_id, event_type, from_status, to_status, actor, note)
+  SELECT UUID_STRING(), :V_ID, 'CREATE', NULL, 'DRAFT', :P_CREATED_BY, 'Created work paper';
+
+  RETURN :V_ID;
+END;
+$$;

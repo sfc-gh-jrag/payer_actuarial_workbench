@@ -1,0 +1,75 @@
+{
+  "_comment": "Canonical join graph the Actuarial Workbench accelerator reasons over. Accelerator-owned and TARGET-AGNOSTIC: endpoints are logical OBJECTS and logical ELEMENT ids (LOGICAL_ID from logical_elements.json), never physical customer tables/columns. Phase-1 discovery instantiates each into a physical row in ACCELERATOR_CORE_RELATIONSHIPS. REQUIRED is set MINIMALLY: only joins whose BOTH endpoints are required objects and that a required arm needs. All others stay REQUIRED=false and are present()-gated in the templates. CARDINALITY hints whether the renderer must de-dup; the profiled cardinality_profile in config.json overrides it.",
+  "relationships": [
+    {
+      "RELATIONSHIP_ID": "MCL__MCH",
+      "LEFT_OBJECT": "MEDICAL_CLAIM_LINE", "LEFT_ELEMENT": "MCL_CLAIM_ID",
+      "RIGHT_OBJECT": "MEDICAL_CLAIM_HEADER", "RIGHT_ELEMENT": "MCH_CLAIM_ID",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": true,
+      "PURPOSE": "Attach claim-level PAID date + member to each medical line so the line (incurred by service month) can be placed on the paid-development triangle. Both endpoints required."
+    },
+    {
+      "RELATIONSHIP_ID": "MCL_POS__POSREF",
+      "LEFT_OBJECT": "MEDICAL_CLAIM_LINE", "LEFT_ELEMENT": "MCL_PLACE_OF_SERVICE_CODE",
+      "RIGHT_OBJECT": "POS_REFERENCE", "RIGHT_ELEMENT": "RPOS_PLACE_OF_SERVICE_CODE",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": true,
+      "PURPOSE": "Classify each medical line into Inpatient / Outpatient / Professional via setting_type + inpatient_flag. Both endpoints required."
+    },
+    {
+      "RELATIONSHIP_ID": "MCH_MBR__MM",
+      "LEFT_OBJECT": "MEDICAL_CLAIM_HEADER", "LEFT_ELEMENT": "MCH_MEMBER_ID",
+      "RIGHT_OBJECT": "MEMBER_MONTH", "RIGHT_ELEMENT": "MM_MEMBER_ID",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": true,
+      "PURPOSE": "Attribute LOB/segment to medical claims (as of the incurred month) and tie to the PMPM denominator. Join is on member + incurred month = eligibility month."
+    },
+    {
+      "RELATIONSHIP_ID": "PHCLM_MBR__MM",
+      "LEFT_OBJECT": "RX_CLAIM", "LEFT_ELEMENT": "PHCLM_MEMBER_ID",
+      "RIGHT_OBJECT": "MEMBER_MONTH", "RIGHT_ELEMENT": "MM_MEMBER_ID",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": true,
+      "PURPOSE": "Attribute LOB/segment to Rx claims (as of the fill month) and tie to the PMPM denominator. Join is on member + fill month = eligibility month."
+    },
+    {
+      "RELATIONSHIP_ID": "MM_MBR__ENR",
+      "LEFT_OBJECT": "MEMBER_MONTH", "LEFT_ELEMENT": "MM_MEMBER_ID",
+      "RIGHT_OBJECT": "MEMBER_ENROLLMENT", "RIGHT_ELEMENT": "ENR_MEMBER_ID",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": false,
+      "PURPOSE": "Enrich member-months with risk score / benefit / funding arrangement. Absent => RAF derived from cost only; enrichments omitted."
+    },
+    {
+      "RELATIONSHIP_ID": "MM_LOB__PTA",
+      "LEFT_OBJECT": "MEMBER_MONTH", "LEFT_ELEMENT": "MM_LINE_OF_BUSINESS",
+      "RIGHT_OBJECT": "PLAN_TREND", "RIGHT_ELEMENT": "PTA_LINE_OF_BUSINESS",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": false,
+      "PURPOSE": "Priced trend / target MLR / target PMPM by LOB for the pricing build-up. Absent => projection-period assumptions are actuary-entered."
+    },
+    {
+      "RELATIONSHIP_ID": "PHCLM_NDC__NDCREF",
+      "LEFT_OBJECT": "RX_CLAIM", "LEFT_ELEMENT": "PHCLM_NDC_CODE",
+      "RIGHT_OBJECT": "NDC_REFERENCE", "RIGHT_ELEMENT": "RNDC_NDC_CODE",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": false,
+      "PURPOSE": "Specialty/generic/brand classification for the Rx experience exhibit. Absent => Rx category defaults from claim flags."
+    },
+    {
+      "RELATIONSHIP_ID": "PHCLM_NDC__REBATE",
+      "LEFT_OBJECT": "RX_CLAIM", "LEFT_ELEMENT": "PHCLM_NDC_CODE",
+      "RIGHT_OBJECT": "REBATE_SOURCE", "RIGHT_ELEMENT": "DR_NDC_CODE",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": false,
+      "PURPOSE": "Net-of-rebate Rx spend for pricing. Absent => net = gross."
+    },
+    {
+      "RELATIONSHIP_ID": "PHCLM_NDC__PRICEHIST",
+      "LEFT_OBJECT": "RX_CLAIM", "LEFT_ELEMENT": "PHCLM_NDC_CODE",
+      "RIGHT_OBJECT": "DRUG_PRICE_HISTORY", "RIGHT_ELEMENT": "RDPH_NDC_CODE",
+      "CARDINALITY": "MANY_TO_MANY", "REL_KIND": "temporal", "REQUIRED": false,
+      "PURPOSE": "Unit-cost component of the Rx trend decomposition. NDC x effective-date; the template selects the applicable period. Absent => Rx trend collapses to utilization + mix."
+    },
+    {
+      "RELATIONSHIP_ID": "GL_LOB__MM",
+      "LEFT_OBJECT": "BOOKED_RESERVE", "LEFT_ELEMENT": "GL_LINE_OF_BUSINESS",
+      "RIGHT_OBJECT": "MEMBER_MONTH", "RIGHT_ELEMENT": "MM_LINE_OF_BUSINESS",
+      "CARDINALITY": "MANY_TO_ONE", "REL_KIND": "equi", "REQUIRED": false,
+      "PURPOSE": "Align the GL booked reserve balance to segment/LOB for the reserve-vs-GL tie-out and roll-forward. Optional — only when the BOOKED_RESERVE (GL) feed is present."
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_DELETE_WORK_PAPER') }}(
+  P_WORK_PAPER_ID STRING, P_ACTOR STRING)
+  RETURNS STRING LANGUAGE SQL
+  COMMENT = 'Delete a DRAFT work paper and its child rows (assumptions, rate build-up, CF overrides, saved estimates). Only DRAFT status may be deleted (REVIEW/SIGNED/FILED are protected). A DELETE event is retained in WORK_PAPER_EVENT as an audit tombstone.'
+AS
+$$
+DECLARE
+  V_STATUS STRING;
+BEGIN
+  SELECT status INTO :V_STATUS FROM {{ target('WORK_PAPER') }} WHERE work_paper_id = :P_WORK_PAPER_ID;
+
+  IF (V_STATUS IS NULL) THEN
+    RETURN 'error: work paper not found';
+  END IF;
+  IF (:V_STATUS <> 'DRAFT') THEN
+    RETURN 'error: only DRAFT work papers can be deleted (status=' || :V_STATUS || ')';
+  END IF;
+
+  -- audit tombstone (kept after the work paper is removed)
+  INSERT INTO {{ target('WORK_PAPER_EVENT') }}
+    (event_id, work_paper_id, event_type, from_status, to_status, actor, note)
+  SELECT UUID_STRING(), :P_WORK_PAPER_ID, 'DELETE', 'DRAFT', NULL, :P_ACTOR, 'Deleted draft work paper';
+
+  -- remove the work paper's child rows, then the header
+  DELETE FROM {{ target('RESERVE_ESTIMATE') }}   WHERE work_paper_id = :P_WORK_PAPER_ID;
+  DELETE FROM {{ target('RESERVE_CF_OVERRIDE') }} WHERE work_paper_id = :P_WORK_PAPER_ID;
+  DELETE FROM {{ target('RATE_BUILDUP') }}        WHERE work_paper_id = :P_WORK_PAPER_ID;
+  DELETE FROM {{ target('ASSUMPTION_LEDGER') }}   WHERE work_paper_id = :P_WORK_PAPER_ID;
+  DELETE FROM {{ target('WORK_PAPER') }}          WHERE work_paper_id = :P_WORK_PAPER_ID;
+
+  RETURN 'deleted draft work paper ' || :P_WORK_PAPER_ID;
+END;
+$$;

@@ -1,0 +1,22 @@
+CREATE OR REPLACE DYNAMIC TABLE {{ target('DT_RX_CLAIM_STG') }}
+  TARGET_LAG = {% if params.target_lag == 'DOWNSTREAM' %}DOWNSTREAM{% else %}'{{ params.target_lag }}'{% endif %}
+  WAREHOUSE = {{ warehouse }}
+  REFRESH_MODE = {{ params.refresh_mode }}
+  CLUSTER BY (member_id, incurred_month)
+  COMMENT = 'Staging: pharmacy claim keyed with materialized incurred(fill)_month + paid_month + rx category. Reversals excluded. Incremental.'
+AS
+SELECT
+  r.{{ c('PHCLM_CLAIM_ID') }}                                AS claim_id,
+  r.{{ c('PHCLM_MEMBER_ID') }}                               AS member_id,
+  'Pharmacy'                                                 AS constituent,
+  CASE WHEN {{ canon('PHCLM_SPECIALTY_DRUG_FLAG','r') }} THEN 'Specialty Rx'
+       WHEN {{ canon('PHCLM_GENERIC_INDICATOR','r') }}   THEN 'Generic Rx'
+       ELSE 'Brand Rx' END                                   AS service_category,
+  DATE_TRUNC('month', r.{{ c('PHCLM_FILL_DATE') }})          AS incurred_month,
+  DATE_TRUNC('month', r.{{ c('PHCLM_PAID_DATE') }})          AS paid_month,
+  COALESCE(r.{{ c('PHCLM_ALLOWED_AMOUNT') }}, r.{{ c('PHCLM_PAID_AMOUNT') }}) AS allowed_amt,
+  r.{{ c('PHCLM_PAID_AMOUNT') }}                             AS paid_amt,
+  COALESCE(r.{{ c('PHCLM_DAYS_SUPPLY') }}, 0)                AS service_units
+FROM {{ tbl('PHCLM_CLAIM_ID') }} r
+WHERE NOT ({{ canon('PHCLM_REVERSAL_FLAG','r') }})
+  AND r.{{ c('PHCLM_PAID_DATE') }} IS NOT NULL;

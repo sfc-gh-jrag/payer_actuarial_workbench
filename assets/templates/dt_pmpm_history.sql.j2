@@ -1,0 +1,28 @@
+CREATE OR REPLACE DYNAMIC TABLE {{ target('DT_PMPM_HISTORY') }}
+  TARGET_LAG = {% if params.target_lag == 'DOWNSTREAM' %}DOWNSTREAM{% else %}'{{ params.target_lag }}'{% endif %}
+
+  WAREHOUSE = {{ warehouse }}
+  REFRESH_MODE = {{ params.refresh_mode }}
+  CLUSTER BY (line_of_business, incurred_month)
+  COMMENT = 'Allowed/paid PMPM + utilization by LOB x constituent x service_category x incurred_month. Incremental over DT_PAID_FACT + DT_MEMBER_MONTHS.'
+AS
+WITH fact AS (
+  SELECT line_of_business, constituent, service_category, incurred_month,
+         SUM(allowed_amt) AS allowed_amt, SUM(paid_amt) AS paid_amt, SUM(service_units) AS service_units
+  FROM {{ target('DT_PAID_FACT') }}
+  GROUP BY 1,2,3,4
+),
+exposure AS (
+  SELECT line_of_business, eligibility_month AS incurred_month, SUM(member_month_fraction) AS member_months
+  FROM {{ target('DT_MEMBER_MONTHS') }}
+  GROUP BY 1,2
+)
+SELECT
+  f.line_of_business, f.constituent, f.service_category, f.incurred_month,
+  f.allowed_amt, f.paid_amt, f.service_units, e.member_months,
+  f.allowed_amt / NULLIF(e.member_months,0)                    AS allowed_pmpm,
+  f.paid_amt    / NULLIF(e.member_months,0)                    AS paid_pmpm,
+  f.service_units * 12000.0 / NULLIF(e.member_months,0)        AS units_per_1000
+FROM fact f
+JOIN exposure e
+  ON e.line_of_business = f.line_of_business AND e.incurred_month = f.incurred_month;

@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS {{ target('ASSUMPTION_LEDGER') }} (
+  ledger_id     VARCHAR(40) NOT NULL PRIMARY KEY,
+  work_paper_id VARCHAR(40) NOT NULL,
+  lever         VARCHAR(60), segment VARCHAR(60), value FLOAT, unit VARCHAR(20),
+  source_basis  VARCHAR(200), rationale VARCHAR(2000), is_judgment BOOLEAN DEFAULT FALSE,
+  author        VARCHAR(120), created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+) CLUSTER BY (work_paper_id)
+  COMMENT = 'Every assumption/override with source + rationale + author (ASOP 41 audit trail).';

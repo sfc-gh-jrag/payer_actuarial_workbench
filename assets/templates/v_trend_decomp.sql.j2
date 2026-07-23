@@ -1,0 +1,28 @@
+CREATE OR REPLACE VIEW {{ target('V_TREND_DECOMP') }}
+  COMMENT = 'Year-over-year PMPM decomposition per LOB x constituent x service_category x incurred_month: frequency (util) x severity (unit cost) effects + interaction, plus current-period exhibit metrics (util/1000, unit cost, PMPM, YoY trend). On-read over DT_PMPM_HISTORY.'
+AS
+WITH m AS (
+  SELECT line_of_business, constituent, service_category, incurred_month,
+         allowed_pmpm,
+         service_units / NULLIF(member_months,0) AS freq,          -- units per member
+         allowed_amt   / NULLIF(service_units,0)  AS unit_cost,     -- allowed per unit
+         units_per_1000
+  FROM {{ target('DT_PMPM_HISTORY') }}
+)
+SELECT
+  c.line_of_business, c.constituent, c.service_category, c.incurred_month,
+  c.units_per_1000,
+  c.unit_cost,
+  c.allowed_pmpm                                              AS pmpm,
+  p.allowed_pmpm                                              AS pmpm_prior_year,
+  c.allowed_pmpm / NULLIF(p.allowed_pmpm,0) - 1               AS yoy_trend_pct,
+  (DATEDIFF('month', c.incurred_month, (SELECT MAX(incurred_month) FROM m)) >= {{ cfg.trend_min_maturity_months }}) AS is_mature,
+  (c.freq - p.freq) * p.unit_cost                             AS util_effect,
+  p.freq * (c.unit_cost - p.unit_cost)                        AS unitcost_effect,
+  (c.freq - p.freq) * (c.unit_cost - p.unit_cost)             AS interaction_effect
+FROM m c
+JOIN m p
+  ON p.line_of_business = c.line_of_business
+ AND p.constituent      = c.constituent
+ AND p.service_category = c.service_category
+ AND p.incurred_month   = DATEADD('month', -12, c.incurred_month);

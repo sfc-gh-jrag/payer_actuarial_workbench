@@ -1,0 +1,65 @@
+{
+  "_comment": "Canonical values that coded source columns must crosswalk to (ACCELERATOR_CORE_CODE_CROSSWALK.CANONICAL_VALUE). Accelerator-owned. Each coded logical element lists its allowed canonical values + semantic role. The renderer's canon() helper turns the customer's raw values into these via CASE. Blank/NULL handling: a crosswalk row with empty SOURCE_VALUE sets the implicit default. Boolean sets {TRUE,FALSE} render as SQL booleans.",
+  "vocabularies": {
+    "LINE_OF_BUSINESS": {
+      "semantic_role": "CATEGORY",
+      "applies_to": ["MM_LINE_OF_BUSINESS", "ENR_LINE_OF_BUSINESS", "PTA_LINE_OF_BUSINESS", "GL_LINE_OF_BUSINESS"],
+      "canonical_values": ["Medicare Advantage", "Commercial", "Medicaid", "Other"],
+      "notes": "Segment/product line. Drives the workbench-global LOB slicer and RAF/trend anchors."
+    },
+    "CONSTITUENT": {
+      "semantic_role": "CATEGORY",
+      "applies_to": ["derived"],
+      "canonical_values": ["Medical", "Pharmacy"],
+      "notes": "Benefit constituent. Derived from source object (medical vs pharmacy), and also carried on the GL booked-reserve feed (GL_CONSTITUENT). Medical and Pharmacy develop very differently."
+    },
+    "SERVICE_CATEGORY": {
+      "semantic_role": "CATEGORY",
+      "applies_to": ["derived from POS_REFERENCE"],
+      "canonical_values": ["Inpatient", "Outpatient", "Professional", "Other"],
+      "notes": "Medical service-category rollup derived from RPOS_SETTING_TYPE + RPOS_INPATIENT_FLAG."
+    },
+    "RX_CATEGORY": {
+      "semantic_role": "CATEGORY",
+      "applies_to": ["derived from RX_CLAIM"],
+      "canonical_values": ["Specialty Rx", "Brand Rx", "Generic Rx"],
+      "notes": "Pharmacy category for the Rx experience exhibit. Derived output rollup from SPECIALTY_DRUG_FLAG + GENERIC_FLAG (each crosswalked as its own boolean); not a direct crosswalk target itself."
+    },
+    "BENEFIT_TYPE": {
+      "semantic_role": "CATEGORY",
+      "applies_to": ["CF_BENEFIT_TYPE"],
+      "canonical_values": ["Medical", "Pharmacy"],
+      "notes": "Completion-factor reference keys completion by benefit type; must align with CONSTITUENT."
+    },
+    "CLAIM_PAID_STATUS": {
+      "semantic_role": "INCLUDE_FILTER",
+      "applies_to": ["MCH_CLAIM_STATUS", "PHCLM_CLAIM_STATUS"],
+      "canonical_values": ["PAID", "DENIED", "PENDING", "REVERSED"],
+      "notes": "Only PAID (finalized) claims contribute to the paid triangle. REVERSED Rx rows are netted/excluded."
+    },
+    "SETTING_INPATIENT_FLAG": {
+      "semantic_role": "FLAG",
+      "applies_to": ["RPOS_INPATIENT_FLAG"],
+      "canonical_values": ["TRUE", "FALSE"],
+      "notes": "Boolean: renders as SQL boolean. Marks the Inpatient setting for service-category rollup."
+    },
+    "SPECIALTY_DRUG_FLAG": {
+      "semantic_role": "FLAG",
+      "applies_to": ["PHCLM_SPECIALTY_DRUG_FLAG", "RNDC_SPECIALTY_DRUG_FLAG"],
+      "canonical_values": ["TRUE", "FALSE"],
+      "notes": "Boolean specialty indicator."
+    },
+    "SERVICE_SETTING": {
+      "semantic_role": "CATEGORY",
+      "applies_to": ["RPOS_SETTING_TYPE"],
+      "canonical_values": ["Facility", "Professional"],
+      "notes": "Canonicalizes the customer's place-of-service setting_type. Combined with SETTING_INPATIENT_FLAG the derived layer classifies Inpatient / Outpatient / Professional without hardcoding raw values."
+    },
+    "GENERIC_FLAG": {
+      "semantic_role": "FLAG",
+      "applies_to": ["PHCLM_GENERIC_INDICATOR", "RNDC_GENERIC_INDICATOR"],
+      "canonical_values": ["TRUE", "FALSE"],
+      "notes": "Boolean generic indicator; drives Generic vs Brand Rx categorization without hardcoding raw code values."
+    }
+  }
+}

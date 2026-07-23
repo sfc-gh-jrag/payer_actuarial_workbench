@@ -1,0 +1,15 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_SAVE_RESERVE_ESTIMATE') }}(
+  P_WORK_PAPER_ID STRING, P_VALUATION_DATE DATE, P_METHOD STRING, P_TAIL FLOAT, P_POOLING FLOAT, P_APRIORI FLOAT)
+  RETURNS STRING LANGUAGE SQL
+AS
+$$
+BEGIN
+  INSERT INTO {{ target('RESERVE_ESTIMATE') }}
+    (work_paper_id, valuation_date, lob, constituent, service_category, incurred_month, method,
+     paid_to_date, ultimate_incurred, ibnr, pmpm)
+  SELECT :P_WORK_PAPER_ID, :P_VALUATION_DATE, line_of_business, constituent, NULL, incurred_month, :P_METHOD,
+         paid_to_date, ultimate, ibnr, NULL
+  FROM TABLE({{ target('TF_RESERVE_BY_METHOD') }}(:P_METHOD, :P_TAIL, :P_POOLING, :P_APRIORI));
+  RETURN 'saved';
+END;
+$$;

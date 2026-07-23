@@ -1,0 +1,24 @@
+CREATE OR REPLACE PROCEDURE {{ target('SP_APPLY_CF_OVERRIDE') }}(
+  P_WORK_PAPER_ID STRING, P_LOB STRING, P_CONSTITUENT STRING, P_INCURRED_MONTH DATE,
+  P_OVERRIDE_CF FLOAT, P_RATIONALE STRING, P_AUTHOR STRING)
+  RETURNS STRING LANGUAGE SQL
+  COMMENT = 'Apply a completion-factor override: persist to RESERVE_CF_OVERRIDE and mirror an audit row into ASSUMPTION_LEDGER (ASOP 41). V_IBNR_COMPLETION picks up the latest APPROVED override for the cell.'
+AS
+$$
+DECLARE
+  V_ID STRING DEFAULT UUID_STRING();
+BEGIN
+  INSERT INTO {{ target('RESERVE_CF_OVERRIDE') }}
+    (override_id, work_paper_id, line_of_business, constituent, incurred_month, override_cf, rationale, author, mapping_status)
+  VALUES
+    (:V_ID, :P_WORK_PAPER_ID, :P_LOB, :P_CONSTITUENT, :P_INCURRED_MONTH, :P_OVERRIDE_CF, :P_RATIONALE, :P_AUTHOR, 'APPROVED');
+
+  INSERT INTO {{ target('ASSUMPTION_LEDGER') }}
+    (ledger_id, work_paper_id, lever, segment, value, unit, source_basis, rationale, is_judgment, author)
+  SELECT UUID_STRING(), :P_WORK_PAPER_ID, 'CF override',
+         :P_LOB || ' / ' || :P_CONSTITUENT || ' / ' || TO_VARCHAR(:P_INCURRED_MONTH),
+         :P_OVERRIDE_CF, 'completion_factor', 'judgment', :P_RATIONALE, TRUE, :P_AUTHOR;
+
+  RETURN 'override applied';
+END;
+$$;

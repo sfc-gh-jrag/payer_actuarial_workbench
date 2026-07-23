@@ -1,0 +1,20 @@
+-- Cortex Agent (best-effort; requires Cortex Agents enabled in the account/region).
+-- Derivation/trace rail: Cortex Analyst over the semantic view. Explain-only (no action dispatch).
+-- If CREATE AGENT is unavailable in this account, deploy this via Snowsight/REST instead.
+CREATE OR REPLACE AGENT {{ target('AGT_ACTUARIAL_WORKBENCH') }}
+  WITH PROFILE = '{"display_name":"Actuarial Workbench Agent"}'
+  COMMENT = 'Derivation/trace agent: explains how a reserve/trend/RAF number was derived over SV_ACTUARIAL_INTELLIGENCE. No action dispatch.'
+FROM SPECIFICATION $$
+{
+  "instructions": {
+    "response": "You are an actuarial derivation/trace assistant. Explain how figures (IBNR, PMPM trend, RAF, reserve-vs-GL) are derived from the semantic view and reserving views. Cite the metric definition and the objects used. Do not recommend assumptions or take actions.",
+    "orchestration": "Use Cortex Analyst for any quantitative question over the semantic view."
+  },
+  "tools": [
+    { "tool_spec": { "type": "cortex_analyst_text_to_sql", "name": "actuarial_analyst" } }
+  ],
+  "tool_resources": {
+    "actuarial_analyst": { "semantic_view": "{{ target('SV_ACTUARIAL_INTELLIGENCE') }}" }
+  }
+}
+$$;

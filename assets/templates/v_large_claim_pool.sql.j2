@@ -1,0 +1,30 @@
+CREATE OR REPLACE VIEW {{ target('V_LARGE_CLAIM_POOL') }}
+  COMMENT = 'Large-claim pooling: excess of claimant-month paid over the pooling point (config.default_reserving.pooling_point), by LOB x constituent x incurred_month. Feeds Reserve excess split and the Study large-claim normalization. On-read.'
+AS
+WITH clm AS (
+  SELECT member_id, constituent, incurred_month, claimant_paid,
+         GREATEST(claimant_paid - {{ cfg.default_reserving.pooling_point }}, 0) AS excess_paid
+  FROM {{ target('DT_CLAIM_TOTALS') }}
+),
+mbr AS (
+  SELECT member_id, eligibility_month, ANY_VALUE(line_of_business) AS line_of_business
+  FROM {{ target('DT_MEMBER_MONTHS') }}
+  GROUP BY 1,2
+),
+expo AS (
+  SELECT line_of_business, eligibility_month, SUM(member_month_fraction) AS member_months
+  FROM {{ target('DT_MEMBER_MONTHS') }}
+  GROUP BY 1,2
+)
+SELECT
+  m.line_of_business, c.constituent, c.incurred_month,
+  SUM(c.claimant_paid)                                            AS total_paid,
+  SUM(c.excess_paid)                                              AS pooled_excess,
+  SUM(c.claimant_paid) - SUM(c.excess_paid)                       AS pooled_capped,
+  COUNT(CASE WHEN c.excess_paid > 0 THEN 1 END)                   AS large_claim_count,
+  e.member_months,
+  SUM(c.excess_paid) / NULLIF(e.member_months,0)                 AS pooled_excess_pmpm
+FROM clm c
+JOIN mbr m  ON c.member_id = m.member_id AND c.incurred_month = m.eligibility_month
+LEFT JOIN expo e ON e.line_of_business = m.line_of_business AND e.eligibility_month = c.incurred_month
+GROUP BY 1,2,3, e.member_months;

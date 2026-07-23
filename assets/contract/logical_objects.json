@@ -1,0 +1,36 @@
+{
+  "_comment": "Canonical logical objects the Actuarial Workbench accelerator reasons over. Accelerator-owned and target-agnostic. The customer maps each of their physical tables onto one of these via ACCELERATOR_CORE_ELEMENTS.LOGICAL_OBJECT. Templates gate on presence: a REQUIRED object missing fails the readiness gate; an OPTIONAL object missing causes the dependent arm/join to be dropped (graceful degradation).",
+  "objects": [
+    { "id": "MEDICAL_CLAIM_HEADER", "label": "Medical claim header", "grain": "one medical claim", "required": true,
+      "powers": "medical reserving spine: incurred (service) + PAID date for paid-development triangles, allowed/paid amounts, member attribution", "notes": "The paid/processed date is what makes the medical triangle + actual-to-expected possible. If absent, reserving falls back to the completion-factor method." },
+    { "id": "MEDICAL_CLAIM_LINE", "label": "Medical claim line", "grain": "one medical claim line", "required": true,
+      "powers": "service-category classification (via POS), line allowed/paid, utilization units", "notes": "Line service date is the incurred date at category grain; paid date comes from the header." },
+    { "id": "RX_CLAIM", "label": "Pharmacy claim", "grain": "one adjudicated Rx claim line", "required": true,
+      "powers": "pharmacy reserving + spend: fill (incurred) + paid dates, allowed/paid, reversals", "notes": "Rx paid date is near-real-time; Rx triangle completes fast." },
+    { "id": "MEMBER_MONTH", "label": "Member eligibility month", "grain": "member x eligibility month", "required": true,
+      "powers": "PMPM denominator, LOB/segment attribution, Rx coverage flag", "notes": "Drives every PMPM metric and the RAF exposure weighting." },
+    { "id": "PERIOD_CLOCK", "label": "Valuation / analysis anchor", "grain": "singleton", "required": true,
+      "powers": "as-of valuation month, paid-through censoring, history/forecast horizons", "notes": "A single anchor month + horizons. If absent, default to max(paid_date)." },
+    { "id": "COMPLETION_FACTOR_REF", "label": "Claim completion factor reference", "grain": "benefit_type x lag_months", "required": true,
+      "powers": "completion-factor IBNR method + calibration/backtest of triangle development", "notes": "Cumulative % complete by development lag, by benefit type (Medical/Pharmacy)." },
+    { "id": "POS_REFERENCE", "label": "Place-of-service reference", "grain": "one row per POS code", "required": true,
+      "powers": "service-category rollup (Inpatient / Outpatient / Professional)", "notes": "Classifies each medical line's setting for the experience exhibit and category triangles." },
+
+    { "id": "MEMBER_ENROLLMENT", "label": "Member enrollment", "grain": "member (enrollment span)", "required": false,
+      "powers": "risk score (RAF) input, benefit/plan design, funding arrangement", "notes": "Absent => RAF derived from cost-experience only; benefit/AV enrichments omitted." },
+    { "id": "PLAN_TREND", "label": "Plan trend / pricing assumption", "grain": "plan-year x LOB", "required": false,
+      "powers": "priced medical/Rx trend, target MLR, target PMPM for the pricing build-up", "notes": "Absent => projection-period trend is actuary-entered in the workbench." },
+    { "id": "REBATE_SOURCE", "label": "Drug rebate source", "grain": "per NDC (table) OR a column on the claim", "required": false,
+      "powers": "net-of-rebate Rx spend for pricing", "notes": "Absent => net = gross." },
+    { "id": "REBATE_ACCRUAL", "label": "Rebate accrual (book-level)", "grain": "plan x LOB x quarter", "required": false,
+      "powers": "guaranteed/realized rebate offset in the Rx rate build-up", "notes": "Optional reconciliation/pricing input." },
+    { "id": "DRUG_PRICE_HISTORY", "label": "Drug unit-price history", "grain": "NDC x effective date", "required": false,
+      "powers": "unit-cost component of Rx trend decomposition", "notes": "Absent => Rx trend collapses to utilization + mix." },
+    { "id": "NDC_REFERENCE", "label": "Drug (NDC) reference master", "grain": "one row per NDC", "required": false,
+      "powers": "specialty/generic/brand classification for Rx experience exhibit", "notes": "Absent => Rx category defaults from claim flags where available." },
+    { "id": "PROC_REFERENCE", "label": "Procedure / revenue / DRG reference", "grain": "one row per code", "required": false,
+      "powers": "richer medical service-category labels beyond POS setting", "notes": "Optional label enrichment; POS setting is the required classifier." },
+    { "id": "BOOKED_RESERVE", "label": "GL booked reserve balance", "grain": "valuation_month x LOB x constituent", "required": false,
+      "powers": "reserve roll-forward, booked-component split (case/IBNP/IBNR/LAE/PfAD), and Reserve-vs-GL tie-out", "notes": "Independent Finance/GL feed (case reserves + LAE + margin are not in claims). Absent => tie-out omitted and case/LAE/PfAD fall back to actuary-entered assumptions." }
+  ]
+}

@@ -1,0 +1,24 @@
+CREATE OR REPLACE DYNAMIC TABLE {{ target('DT_MED_CLAIM_STG') }}
+  TARGET_LAG = {% if params.target_lag == 'DOWNSTREAM' %}DOWNSTREAM{% else %}'{{ params.target_lag }}'{% endif %}
+  WAREHOUSE = {{ warehouse }}
+  REFRESH_MODE = {{ params.refresh_mode }}
+  CLUSTER BY (member_id, incurred_month)
+  COMMENT = 'Staging: medical claim line keyed with materialized incurred_month + paid_month + service_category (equality-join ready). Incremental.'
+AS
+SELECT
+  l.{{ c('MCL_CLAIM_LINE_ID') }}                              AS claim_line_id,
+  h.{{ c('MCH_MEMBER_ID') }}                                 AS member_id,
+  'Medical'                                                  AS constituent,
+  CASE WHEN {{ canon('RPOS_INPATIENT_FLAG','pos') }} THEN 'Inpatient'
+       WHEN {{ canon('RPOS_SETTING_TYPE','pos') }} = 'Facility'     THEN 'Outpatient'
+       WHEN {{ canon('RPOS_SETTING_TYPE','pos') }} = 'Professional' THEN 'Professional'
+       ELSE 'Other' END                                      AS service_category,
+  DATE_TRUNC('month', l.{{ c('MCL_SERVICE_DATE') }})         AS incurred_month,
+  DATE_TRUNC('month', h.{{ c('MCH_CLAIM_PAID_DATE') }})      AS paid_month,
+  l.{{ c('MCL_ALLOWED_AMOUNT') }}                            AS allowed_amt,
+  l.{{ c('MCL_PAID_AMOUNT') }}                               AS paid_amt,
+  COALESCE(l.{{ c('MCL_UNITS_OF_SERVICE') }}, 0)             AS service_units
+FROM {{ tbl('MCL_CLAIM_ID') }} l
+JOIN {{ tbl('MCH_CLAIM_ID') }} h ON {{ join('MCL__MCH','l','h') }}
+LEFT JOIN {{ tbl('RPOS_PLACE_OF_SERVICE_CODE') }} pos ON {{ join('MCL_POS__POSREF','l','pos') }}
+WHERE h.{{ c('MCH_CLAIM_PAID_DATE') }} IS NOT NULL;

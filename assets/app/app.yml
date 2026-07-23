@@ -1,0 +1,11 @@
+install:
+  commands:
+    - ["npm", "ci", "--include=dev"]
+
+run:
+  command: ["node", ".next/standalone/server.js"]
+
+profile:
+  label: "Actuarial Workbench"
+  description: "Reserve · Study · Price — a versioned actuarial workbench (IBNR close, trend study, and bid/rate build-up) running as a thin client over the ACTUARIAL derived data product."
+  icon: icon.svg

@@ -1,0 +1,47 @@
+CREATE OR REPLACE VIEW {{ target('V_BID_CHECKS') }}
+  COMMENT = 'Bid / URRT / BPT validation flags per LOB x constituent x plan_year: trend reasonableness, credibility, RAF normalization, experience completeness, backtest accuracy, rate build-up completeness, MLR floor. PASS/WARN/FAIL. On-read.'
+AS
+WITH pi AS (SELECT * FROM {{ target('V_PRICING_INPUT') }}),
+sel AS (SELECT line_of_business, constituent, n_months, backtest_mape FROM {{ target('V_TREND_SELECTED') }}),
+rb AS (SELECT lob AS line_of_business, constituent, plan_year, COUNT(*) AS steps,
+              MAX(IFF(component ILIKE '%premium%' OR component ILIKE '%required%', value, NULL)) AS premium_pmpm
+       FROM {{ target('RATE_BUILDUP') }} GROUP BY 1,2,3),
+base AS (
+  SELECT pi.line_of_business, pi.constituent, pi.plan_year, pi.selected_trend, pi.credibility_z,
+         pi.raf_normalization_factor, pi.required_pmpm_before_loads,
+         s.n_months, s.backtest_mape, COALESCE(rb.steps,0) AS rb_steps, rb.premium_pmpm
+  FROM pi
+  LEFT JOIN sel s ON s.line_of_business=pi.line_of_business AND s.constituent=pi.constituent
+  LEFT JOIN rb ON rb.line_of_business=pi.line_of_business AND rb.constituent=pi.constituent AND rb.plan_year=pi.plan_year
+)
+SELECT line_of_business, constituent, plan_year, 'TREND_REASONABLE' AS check_name,
+       IFF(selected_trend BETWEEN {{ cfg.trend_reasonable_band[0] }} AND {{ cfg.trend_reasonable_band[1] }}, 'PASS', 'FAIL') AS status,
+       'Selected trend ' || ROUND(selected_trend*100,1) || '% (band ' || {{ cfg.trend_reasonable_band[0] }}*100 || '-' || {{ cfg.trend_reasonable_band[1] }}*100 || '%)' AS detail
+FROM base
+UNION ALL
+SELECT line_of_business, constituent, plan_year, 'CREDIBILITY_SUFFICIENT',
+       IFF(credibility_z >= 0.5, 'PASS', 'WARN'),
+       'Credibility Z = ' || ROUND(credibility_z,2) FROM base
+UNION ALL
+SELECT line_of_business, constituent, plan_year, 'RAF_NORMALIZATION_PRESENT',
+       IFF(raf_normalization_factor IS NOT NULL, 'PASS', 'FAIL'),
+       'RAF norm factor = ' || COALESCE(ROUND(raf_normalization_factor,3)::STRING,'(missing)') FROM base
+UNION ALL
+SELECT line_of_business, constituent, plan_year, 'EXPERIENCE_COMPLETENESS',
+       IFF(n_months >= 12, 'PASS', 'WARN'),
+       COALESCE(n_months,0) || ' mature months in fit window' FROM base
+UNION ALL
+SELECT line_of_business, constituent, plan_year, 'BACKTEST_ACCURACY',
+       CASE WHEN backtest_mape IS NULL THEN 'WARN' WHEN backtest_mape <= 0.10 THEN 'PASS' WHEN backtest_mape <= 0.20 THEN 'WARN' ELSE 'FAIL' END,
+       'Backtest MAPE = ' || COALESCE(ROUND(backtest_mape*100,1)::STRING,'(n/a)') || '%' FROM base
+UNION ALL
+SELECT line_of_business, constituent, plan_year, 'RATE_BUILDUP_COMPLETE',
+       IFF(rb_steps > 0, 'PASS', 'WARN'),
+       IFF(rb_steps > 0, rb_steps || ' build-up steps', 'Rate build-up not yet entered') FROM base
+UNION ALL
+SELECT line_of_business, constituent, plan_year, 'MLR_FLOOR',
+       CASE WHEN premium_pmpm IS NULL THEN 'WARN'
+            WHEN required_pmpm_before_loads / NULLIF(premium_pmpm,0) >= {{ cfg.mlr_floor }} THEN 'PASS' ELSE 'FAIL' END,
+       CASE WHEN premium_pmpm IS NULL THEN 'Pending rate build-up (no premium)'
+            ELSE 'Implied MLR ' || ROUND(required_pmpm_before_loads / NULLIF(premium_pmpm,0)*100,1) || '% (floor ' || {{ cfg.mlr_floor }}*100 || '%)' END
+FROM base;

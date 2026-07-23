@@ -1,0 +1,19 @@
+CREATE OR REPLACE VIEW {{ target('V_CLAIM_TRIANGLE') }}
+  COMMENT = 'Incurred x development-lag cumulative paid, censored at the DEMO_CLOCK anchor on read. Always current.'
+AS
+WITH anchor AS (SELECT {{ c('DEMO_ANCHOR_MONTH') }} AS anchor_month FROM {{ tbl('DEMO_ANCHOR_MONTH') }}),
+inc AS (
+  SELECT f.line_of_business, f.constituent, f.service_category, f.incurred_month, f.paid_month,
+         DATEDIFF('month', f.incurred_month, f.paid_month) AS dev_lag, f.paid_amt
+  FROM {{ target('DT_PAID_FACT') }} f, anchor a
+  WHERE f.paid_month <= a.anchor_month
+    AND DATEDIFF('month', f.incurred_month, f.paid_month) >= 0
+)
+SELECT line_of_business, constituent, service_category, incurred_month, dev_lag,
+       SUM(paid_amt) AS incremental_paid,
+       SUM(SUM(paid_amt)) OVER (
+         PARTITION BY line_of_business, constituent, service_category, incurred_month
+         ORDER BY dev_lag ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+       ) AS cumulative_paid
+FROM inc
+GROUP BY 1,2,3,4,5;

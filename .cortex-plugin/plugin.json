@@ -1,0 +1,8 @@
+{
+  "name": "actuarial-workbench",
+  "description": "Deploy the Actuarial Workbench accelerator on your own Snowflake data. Maps your payer core (medical + pharmacy claims, membership, reference) to a conformance contract, generates the derived actuarial data product (exposure, paid-development facts, PMPM history, triangles, IBNR, normalized RAF) from templates, and stands up the workbench app.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Snowflake HCLS Solutions"
+  }
+}

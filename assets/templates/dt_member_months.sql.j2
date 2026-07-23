@@ -1,0 +1,17 @@
+CREATE OR REPLACE DYNAMIC TABLE {{ target('DT_MEMBER_MONTHS') }}
+  TARGET_LAG = {% if params.target_lag == 'DOWNSTREAM' %}DOWNSTREAM{% else %}'{{ params.target_lag }}'{% endif %}
+
+  WAREHOUSE = {{ warehouse }}
+  REFRESH_MODE = {{ params.refresh_mode }}
+  CLUSTER BY (line_of_business, eligibility_month)
+  COMMENT = 'Exposure grain (member x eligibility month). PMPM denominator. Incremental projection from core MEMBER_MONTH.'
+AS
+SELECT
+  {{ col('MM_MEMBER_ID','mm') }}                 AS member_id,
+  mm.{{ c('MM_ELIGIBILITY_MONTH') }}             AS eligibility_month,
+  mm.{{ c('MM_LINE_OF_BUSINESS') }}              AS line_of_business,
+  {% if has_element('MM_PLAN_ID') %}mm.{{ c('MM_PLAN_ID') }}{% else %}NULL{% endif %}                          AS plan_id,
+  {% if has_element('MM_PHARMACY_COVERAGE_FLAG') %}mm.{{ c('MM_PHARMACY_COVERAGE_FLAG') }}{% else %}NULL{% endif %}  AS pharmacy_coverage_flag,
+  {% if has_element('MM_FUNDING_ARRANGEMENT') %}mm.{{ c('MM_FUNDING_ARRANGEMENT') }}{% else %}NULL{% endif %}        AS funding_arrangement,
+  mm.{{ c('MM_MEMBER_MONTH_FRACTION') }}         AS member_month_fraction
+FROM {{ tbl('MM_MEMBER_ID') }} mm;

@@ -1,0 +1,45 @@
+CREATE OR REPLACE VIEW {{ target('V_ACTUAL_TO_EXPECTED') }}
+  COMMENT = 'Actual-to-expected development from REAL paid-date censoring (no saved snapshots required): current completion-factor ultimate (from V_IBNR_COMPLETION, override-aware) vs the ultimate we would have estimated config.ae_lookback_months ago, reconstructed by censoring DT_PAID_FACT at the prior anchor. Live on day 1. On-read.'
+AS
+WITH params AS (
+  SELECT {{ c('DEMO_ANCHOR_MONTH') }} AS cur_anchor,
+         DATEADD('month', -{{ cfg.ae_lookback_months }}, {{ c('DEMO_ANCHOR_MONTH') }}) AS prior_anchor
+  FROM {{ tbl('DEMO_ANCHOR_MONTH') }}
+),
+cur AS (
+  SELECT line_of_business, constituent, incurred_month, ultimate_incurred AS current_ultimate
+  FROM {{ target('V_IBNR_COMPLETION') }}
+),
+prior_ptd AS (
+  SELECT f.line_of_business, f.constituent, f.incurred_month,
+         DATEDIFF('month', f.incurred_month, p.prior_anchor) AS lag_prior,
+         SUM(f.paid_amt) AS paid_prior
+  FROM {{ target('DT_PAID_FACT') }} f, params p
+  WHERE f.paid_month <= p.prior_anchor
+  GROUP BY 1,2,3, DATEDIFF('month', f.incurred_month, p.prior_anchor)
+),
+prior AS (
+  SELECT pp.line_of_business, pp.constituent, pp.incurred_month,
+         pp.paid_prior / NULLIF(COALESCE(cf.{{ c('CF_COMPLETION_FACTOR') }}, 1.0),0) AS prior_ultimate
+  FROM prior_ptd pp
+  LEFT JOIN {{ tbl('CF_BENEFIT_TYPE') }} cf
+    ON cf.{{ c('CF_BENEFIT_TYPE') }} = pp.constituent
+   AND cf.{{ c('CF_LAG_MONTHS') }} = LEAST(pp.lag_prior, {{ cfg.max_completion_lag }})
+  WHERE pp.lag_prior >= 0
+)
+SELECT
+  c.line_of_business AS lob, c.constituent, c.incurred_month,
+  (SELECT prior_anchor FROM params) AS prior_valuation,
+  (SELECT cur_anchor   FROM params) AS current_valuation,
+  'COMPLETION' AS method,
+  p.prior_ultimate     AS expected_ultimate,
+  c.current_ultimate   AS restated_ultimate,
+  c.current_ultimate - p.prior_ultimate            AS development,
+  c.current_ultimate / NULLIF(p.prior_ultimate,0)  AS ae_ratio,
+  CASE WHEN c.current_ultimate > p.prior_ultimate THEN 'ADVERSE'
+       WHEN c.current_ultimate < p.prior_ultimate THEN 'FAVORABLE'
+       ELSE 'ON_TRACK' END                          AS development_signal
+FROM cur c
+JOIN prior p
+  ON p.line_of_business = c.line_of_business AND p.constituent = c.constituent AND p.incurred_month = c.incurred_month
+WHERE p.prior_ultimate IS NOT NULL;

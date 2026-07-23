@@ -1,0 +1,64 @@
+CREATE OR REPLACE VIEW {{ target('V_TREND_SELECTED') }}
+  COMMENT = 'Modeled annualized trend per LOB x constituent: log-linear fit on completed PMPM over the last config.trend_fit_window_months, split into frequency (util) and severity (unit cost), with a 6-month holdout backtest MAPE. This is the modeled value the actuary reviews/overrides. On-read.'
+AS
+WITH comp AS (
+  SELECT line_of_business, constituent, incurred_month,
+         DATEDIFF('month', DATE '2000-01-01', incurred_month) AS idx,
+         completed_pmpm AS cp
+  FROM {{ target('V_TREND_COMPLETED') }}
+  WHERE completed_pmpm > 0
+    AND lag_from_anchor >= {{ cfg.trend_min_maturity_months }}   -- mature months only (immature completion is unreliable)
+),
+win AS (
+  SELECT * FROM comp
+  WHERE incurred_month >= DATEADD('month', -{{ cfg.trend_fit_window_months }}, (SELECT MAX(incurred_month) FROM comp))
+),
+fs AS (
+  SELECT line_of_business, constituent, incurred_month,
+         DATEDIFF('month', DATE '2000-01-01', incurred_month) AS idx,
+         SUM(service_units) / NULLIF(ANY_VALUE(member_months),0) AS f,
+         SUM(allowed_amt)   / NULLIF(SUM(service_units),0)       AS s
+  FROM {{ target('DT_PMPM_HISTORY') }}
+  WHERE DATEDIFF('month', incurred_month, (SELECT MAX(incurred_month) FROM {{ target('DT_PMPM_HISTORY') }})) >= {{ cfg.trend_min_maturity_months }}
+  GROUP BY 1,2,3
+),
+fswin AS (
+  SELECT * FROM fs
+  WHERE incurred_month >= DATEADD('month', -{{ cfg.trend_fit_window_months }}, (SELECT MAX(incurred_month) FROM fs))
+),
+trend AS (
+  SELECT line_of_business, constituent,
+         EXP(REGR_SLOPE(LN(GREATEST(cp,1e-9)), idx) * 12) - 1 AS annualized_trend,
+         COUNT(*) AS n_months
+  FROM win GROUP BY 1,2
+),
+fstrend AS (
+  SELECT line_of_business, constituent,
+         EXP(REGR_SLOPE(LN(GREATEST(f,1e-9)), idx) * 12) - 1 AS freq_trend,
+         EXP(REGR_SLOPE(LN(GREATEST(s,1e-9)), idx) * 12) - 1 AS severity_trend
+  FROM fswin GROUP BY 1,2
+),
+maxidx AS (SELECT line_of_business, constituent, MAX(idx) AS mx FROM win GROUP BY 1,2),
+train AS (
+  SELECT w.line_of_business, w.constituent,
+         REGR_SLOPE(LN(GREATEST(w.cp,1e-9)), w.idx)     AS b,
+         REGR_INTERCEPT(LN(GREATEST(w.cp,1e-9)), w.idx) AS a
+  FROM win w JOIN maxidx m ON w.line_of_business=m.line_of_business AND w.constituent=m.constituent
+  WHERE w.idx <= m.mx - 6
+  GROUP BY 1,2
+),
+test AS (
+  SELECT w.line_of_business, w.constituent,
+         AVG(ABS(w.cp - EXP(t.a + t.b * w.idx)) / NULLIF(w.cp,0)) AS backtest_mape
+  FROM win w
+  JOIN maxidx m ON w.line_of_business=m.line_of_business AND w.constituent=m.constituent
+  JOIN train  t ON t.line_of_business=w.line_of_business AND t.constituent=w.constituent
+  WHERE w.idx > m.mx - 6
+  GROUP BY 1,2
+)
+SELECT tr.line_of_business, tr.constituent,
+       tr.annualized_trend, fst.freq_trend, fst.severity_trend,
+       te.backtest_mape, tr.n_months
+FROM trend tr
+LEFT JOIN fstrend fst ON fst.line_of_business=tr.line_of_business AND fst.constituent=tr.constituent
+LEFT JOIN test    te  ON te.line_of_business=tr.line_of_business  AND te.constituent=tr.constituent;

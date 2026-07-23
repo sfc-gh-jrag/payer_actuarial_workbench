@@ -1,0 +1,12 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Actuarial Workbench">
+  <rect width="128" height="128" rx="26" fill="#0a2f5a"/>
+  <!-- development triangle: rows shrink as they mature -->
+  <g>
+    <rect x="26" y="30" width="76" height="13" rx="2.5" fill="#29b5e8"/>
+    <rect x="26" y="49" width="60" height="13" rx="2.5" fill="#4f9bf0"/>
+    <rect x="26" y="68" width="44" height="13" rx="2.5" fill="#6fb7ef"/>
+    <rect x="26" y="87" width="28" height="13" rx="2.5" fill="#9cccf2"/>
+  </g>
+  <!-- immature diagonal marker -->
+  <circle cx="96" cy="93" r="8" fill="#ffd27a"/>
+</svg>

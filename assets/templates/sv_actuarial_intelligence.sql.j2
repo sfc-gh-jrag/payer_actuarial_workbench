@@ -1,0 +1,286 @@
+CREATE OR REPLACE SEMANTIC VIEW {{ target('SV_ACTUARIAL_INTELLIGENCE') }}
+  TABLES (
+    pmpm AS {{ target('DT_PMPM_HISTORY') }}
+      PRIMARY KEY (line_of_business, constituent, service_category, incurred_month)
+      WITH SYNONYMS ('experience','pmpm history','allowed and paid pmpm','utilization')
+      COMMENT = 'Monthly experience: allowed/paid PMPM and utilization by LOB x constituent x service category x incurred month.',
+    ibnr AS {{ target('V_IBNR_COMPLETION') }}
+      PRIMARY KEY (line_of_business, constituent, incurred_month)
+      WITH SYNONYMS ('ibnr','reserve','completion factor','incurred but not reported','ultimate')
+      COMMENT = 'Completion-factor IBNR by incurred month: paid-to-date / effective completion factor -> ultimate and IBNR. Override-aware.',
+    reserve_method AS {{ target('DT_RESERVE_BY_METHOD') }}
+      PRIMARY KEY (line_of_business, constituent, incurred_month)
+      WITH SYNONYMS ('chain ladder reserve','reserve by method','method reserve')
+      COMMENT = 'Chain-ladder reserve snapshot at default parameters by incurred month.',
+    rollforward AS {{ target('V_RESERVE_ROLLFORWARD') }}
+      PRIMARY KEY (valuation_month, line_of_business, constituent)
+      WITH SYNONYMS ('roll-forward','reserve roll forward','booked reserve','gl tie-out','reserve components')
+      COMMENT = 'Reserve roll-forward (begin + incurred - paid = end), booked components (case/IBNP/IBNR/LAE/PfAD) and Reserve-vs-GL tie-out by valuation month.',
+    ae AS {{ target('V_ACTUAL_TO_EXPECTED') }}
+      PRIMARY KEY (lob, constituent, incurred_month)
+      WITH SYNONYMS ('actual to expected','a/e','development','favorable adverse','restatement')
+      COMMENT = 'Actual-to-expected development: prior valuation estimate vs current restated ultimate, with A/E ratio and favorable/adverse signal.',
+    pool AS {{ target('V_LARGE_CLAIM_POOL') }}
+      PRIMARY KEY (line_of_business, constituent, incurred_month)
+      WITH SYNONYMS ('large claim pooling','pooled excess','shock claims','excess over pooling point')
+      COMMENT = 'Large-claim pooling: claimant paid over the pooling point, excess amount, count and excess PMPM by incurred month.',
+    trend_decomp AS {{ target('V_TREND_DECOMP') }}
+      PRIMARY KEY (line_of_business, constituent, service_category, incurred_month)
+      WITH SYNONYMS ('trend decomposition','experience exhibit','frequency severity','utilization unit cost mix','yoy trend')
+      COMMENT = 'Year-over-year PMPM decomposition per service category: frequency (utilization) x severity (unit cost) effects plus current-period exhibit metrics.',
+    trend_selected AS {{ target('V_TREND_SELECTED') }}
+      PRIMARY KEY (line_of_business, constituent)
+      WITH SYNONYMS ('selected trend','modeled trend','annualized trend','backtest','trend rate')
+      COMMENT = 'Modeled annualized trend per LOB x constituent (frequency/severity split) with holdout backtest MAPE.',
+    trend_projection AS {{ target('V_TREND_PROJECTION') }}
+      PRIMARY KEY (line_of_business, constituent)
+      WITH SYNONYMS ('trend projection','projected pmpm','trended base')
+      COMMENT = 'Trailing-12 completed PMPM base projected forward by the selected trend for the projection horizon.',
+    trend_summary AS {{ target('V_TREND_SUMMARY') }}
+      PRIMARY KEY (line_of_business, constituent, step_seq)
+      WITH SYNONYMS ('trend build-up','trend bridge','build up rows','trend components')
+      COMMENT = 'Trend build-up rows per LOB x constituent: base PMPM plus utilization, unit cost, mix and large-claim normalization deltas.',
+    pricing AS {{ target('V_PRICING_INPUT') }}
+      PRIMARY KEY (line_of_business, constituent, plan_year)
+      WITH SYNONYMS ('rate build-up','pricing input','required pmpm','credibility','raf normalization')
+      COMMENT = 'Pricing seed per plan year: credibility-blended base, trended, RAF-normalized required PMPM before loads.',
+    bidchecks AS {{ target('V_BID_CHECKS') }}
+      PRIMARY KEY (line_of_business, constituent, plan_year, check_name)
+      WITH SYNONYMS ('bid checks','urrt checks','bpt checks','mlr check','consistency checks','validation')
+      COMMENT = 'Bid / URRT / BPT validation checks with PASS/WARN/FAIL status by plan year.',
+    risk AS {{ target('DT_MEMBER_RISK_SCORE') }}
+      PRIMARY KEY (member_id)
+      WITH SYNONYMS ('raf','risk score','risk adjustment factor','member risk','normalized risk')
+      COMMENT = 'Derived normalized RAF (risk adjustment factor) per member with experience PMPM basis.'
+  )
+  FACTS (
+    -- experience
+    pmpm.allowed_pmpm AS allowed_pmpm WITH SYNONYMS ('allowed pmpm') COMMENT = 'Allowed PMPM (allowed amount / member months).',
+    pmpm.paid_pmpm AS paid_pmpm WITH SYNONYMS ('paid pmpm') COMMENT = 'Paid PMPM (paid amount / member months).',
+    pmpm.units_per_1000 AS units_per_1000 WITH SYNONYMS ('utilization','util per 1000') COMMENT = 'Annualized utilization per 1,000 members.',
+    -- ibnr
+    ibnr.paid_to_date AS paid_to_date COMMENT = 'Cumulative paid to date at the valuation anchor.',
+    ibnr.reference_cf AS reference_cf WITH SYNONYMS ('reference completion factor') COMMENT = 'Modeled reference completion factor from the development curve.',
+    ibnr.override_cf AS override_cf WITH SYNONYMS ('override completion factor') COMMENT = 'Actuary override completion factor, if any.',
+    ibnr.completion_factor AS completion_factor WITH SYNONYMS ('completion factor','development factor','percent complete') COMMENT = 'Effective completion factor used (override if present else reference).',
+    ibnr.ultimate_incurred AS ultimate_incurred WITH SYNONYMS ('ultimate','ultimate incurred') COMMENT = 'Estimated ultimate incurred = paid-to-date / completion factor.',
+    ibnr.ibnr AS ibnr WITH SYNONYMS ('ibnr','reserve','incurred but not reported') COMMENT = 'IBNR = ultimate - paid-to-date.',
+    -- reserve by method
+    reserve_method.rm_ibnr AS ibnr WITH SYNONYMS ('chain ladder ibnr') COMMENT = 'Chain-ladder IBNR at default parameters.',
+    reserve_method.rm_ultimate AS ultimate WITH SYNONYMS ('chain ladder ultimate') COMMENT = 'Chain-ladder ultimate at default parameters.',
+    reserve_method.rm_completion_factor AS completion_factor COMMENT = 'Chain-ladder completion factor.',
+    -- roll-forward + components + GL tie-out
+    rollforward.beginning_reserve AS beginning_reserve COMMENT = 'Reserve at the start of the period.',
+    rollforward.incurred_in_period AS incurred_in_period COMMENT = 'Incurred during the period.',
+    rollforward.paid_in_period AS paid_in_period COMMENT = 'Paid during the period.',
+    rollforward.ending_reserve AS ending_reserve WITH SYNONYMS ('booked reserve','ending reserve') COMMENT = 'Reserve at the end of the period.',
+    rollforward.case_reserve AS case_reserve COMMENT = 'Booked case reserve component.',
+    rollforward.ibnp_reserve AS ibnp_reserve WITH SYNONYMS ('ibnp') COMMENT = 'Incurred but not paid component.',
+    rollforward.ibnr_booked AS ibnr_booked WITH SYNONYMS ('booked ibnr') COMMENT = 'Booked IBNR component.',
+    rollforward.lae_reserve AS lae_reserve WITH SYNONYMS ('lae') COMMENT = 'Loss adjustment expense reserve.',
+    rollforward.pfad_margin AS pfad_margin WITH SYNONYMS ('pfad','provision for adverse deviation') COMMENT = 'Provision for adverse deviation margin.',
+    rollforward.derived_ibnr AS derived_ibnr COMMENT = 'Independently derived IBNR (completion-factor) for tie-out.',
+    rollforward.reserve_vs_gl_variance AS reserve_vs_gl_variance WITH SYNONYMS ('reserve vs gl','tie-out variance') COMMENT = 'Derived reserve minus booked GL reserve (tie-out).',
+    rollforward.margin_over_booked_pct AS margin_over_booked_pct WITH SYNONYMS ('margin over booked') COMMENT = 'Margin of derived over booked reserve, percent.',
+    -- actual to expected
+    ae.expected_ultimate AS expected_ultimate WITH SYNONYMS ('prior estimate','expected') COMMENT = 'Prior-valuation estimated ultimate.',
+    ae.restated_ultimate AS restated_ultimate WITH SYNONYMS ('restated','current ultimate') COMMENT = 'Current restated ultimate.',
+    ae.development AS development WITH SYNONYMS ('delta development','movement') COMMENT = 'Restated minus expected (positive = adverse).',
+    ae.ae_ratio AS ae_ratio WITH SYNONYMS ('a/e ratio','actual to expected ratio') COMMENT = 'Restated / expected ultimate.',
+    -- pooling
+    pool.total_paid AS total_paid COMMENT = 'Total claimant paid in the month.',
+    pool.pooled_excess AS pooled_excess WITH SYNONYMS ('excess','excess over pooling point') COMMENT = 'Paid in excess of the pooling point.',
+    pool.pooled_capped AS pooled_capped COMMENT = 'Paid capped at the pooling point.',
+    pool.pooled_excess_pmpm AS pooled_excess_pmpm WITH SYNONYMS ('large claim pmpm') COMMENT = 'Pooled excess expressed PMPM.',
+    -- trend decomposition
+    trend_decomp.td_units_per_1000 AS units_per_1000 COMMENT = 'Utilization per 1,000 for the exhibit row.',
+    trend_decomp.unit_cost AS unit_cost WITH SYNONYMS ('unit cost','cost per service') COMMENT = 'Allowed per unit (severity).',
+    trend_decomp.td_pmpm AS pmpm WITH SYNONYMS ('category pmpm') COMMENT = 'Allowed PMPM for the service category.',
+    trend_decomp.pmpm_prior_year AS pmpm_prior_year COMMENT = 'Allowed PMPM 12 months prior.',
+    trend_decomp.yoy_trend_pct AS yoy_trend_pct WITH SYNONYMS ('yoy trend','year over year trend') COMMENT = 'Year-over-year PMPM trend percent.',
+    trend_decomp.util_effect AS util_effect WITH SYNONYMS ('utilization effect','frequency effect') COMMENT = 'Frequency (utilization) contribution to PMPM change.',
+    trend_decomp.unitcost_effect AS unitcost_effect WITH SYNONYMS ('unit cost effect','severity effect') COMMENT = 'Severity (unit cost) contribution to PMPM change.',
+    trend_decomp.interaction_effect AS interaction_effect WITH SYNONYMS ('mix effect','interaction') COMMENT = 'Interaction / mix contribution to PMPM change.',
+    -- selected trend
+    trend_selected.annualized_trend AS annualized_trend WITH SYNONYMS ('trend','annual trend','underlying trend') COMMENT = 'Modeled annualized PMPM trend.',
+    trend_selected.ts_freq_trend AS freq_trend WITH SYNONYMS ('frequency trend','utilization trend') COMMENT = 'Frequency component of trend.',
+    trend_selected.ts_severity_trend AS severity_trend WITH SYNONYMS ('severity trend','unit cost trend') COMMENT = 'Severity component of trend.',
+    trend_selected.backtest_mape AS backtest_mape WITH SYNONYMS ('mape','backtest error') COMMENT = 'Holdout backtest mean absolute percent error.',
+    trend_selected.n_months AS n_months COMMENT = 'Mature months used in the trend fit.',
+    -- projection
+    trend_projection.base_pmpm AS base_pmpm WITH SYNONYMS ('base experience','trailing 12 base') COMMENT = 'Trailing-12 completed PMPM base.',
+    trend_projection.tp_selected_trend AS selected_trend COMMENT = 'Selected annual trend applied.',
+    trend_projection.projection_years AS projection_years COMMENT = 'Projection horizon in years.',
+    trend_projection.projected_pmpm AS projected_pmpm WITH SYNONYMS ('projected pmpm','trended pmpm') COMMENT = 'Base projected forward by the selected trend.',
+    -- trend build-up
+    trend_summary.delta_pmpm AS delta_pmpm WITH SYNONYMS ('component delta','build-up delta') COMMENT = 'PMPM delta contributed by the build-up component.',
+    -- pricing
+    pricing.base_experience_pmpm AS base_experience_pmpm WITH SYNONYMS ('base experience') COMMENT = 'Base experience PMPM before credibility.',
+    pricing.manual_pmpm AS manual_pmpm WITH SYNONYMS ('manual rate') COMMENT = 'Manual (book) PMPM used in the credibility blend.',
+    pricing.credibility_z AS credibility_z WITH SYNONYMS ('credibility','z factor') COMMENT = 'Credibility weight on experience (0-1).',
+    pricing.credibility_blended_pmpm AS credibility_blended_pmpm WITH SYNONYMS ('blended pmpm','credibility blend') COMMENT = 'Credibility-weighted blend of experience and manual.',
+    pricing.pr_selected_trend AS selected_trend COMMENT = 'Trend applied to the projection year.',
+    pricing.pr_projected_pmpm AS projected_pmpm COMMENT = 'Blended base trended to the plan year.',
+    pricing.raf_current AS raf_current WITH SYNONYMS ('current raf','average raf') COMMENT = 'Current average RAF for the LOB.',
+    pricing.raf_normalization_factor AS raf_normalization_factor WITH SYNONYMS ('raf normalization','raf re-norm') COMMENT = 'RAF normalization factor (target / current RAF).',
+    pricing.required_pmpm_before_loads AS required_pmpm_before_loads WITH SYNONYMS ('required pmpm','projected required pmpm','bid pmpm') COMMENT = 'Required PMPM before benefit/expense/margin loads.',
+    -- risk
+    risk.risk_score_derived AS risk_score_derived WITH SYNONYMS ('raf','risk score') COMMENT = 'Derived normalized risk adjustment factor.',
+    risk.experience_pmpm AS experience_pmpm COMMENT = 'Member experience PMPM basis for RAF.',
+    risk.medical_allowed AS medical_allowed COMMENT = 'Member medical allowed used in RAF basis.',
+    risk.rx_allowed AS rx_allowed COMMENT = 'Member Rx allowed used in RAF basis.'
+  )
+  DIMENSIONS (
+    pmpm.line_of_business AS line_of_business WITH SYNONYMS ('lob','product line','plan type','segment') COMMENT = 'Line of business.' SAMPLE_VALUES ('Medicare Advantage','Commercial') IS_ENUM,
+    pmpm.constituent AS constituent WITH SYNONYMS ('benefit type','medical or pharmacy') COMMENT = 'Benefit constituent.' SAMPLE_VALUES ('Medical','Pharmacy') IS_ENUM,
+    pmpm.service_category AS service_category WITH SYNONYMS ('category','service type','place of service') COMMENT = 'Service category.' SAMPLE_VALUES ('Inpatient','Outpatient','Professional','Specialty Rx','Brand Rx','Generic Rx','Other'),
+    pmpm.incurred_month AS incurred_month WITH SYNONYMS ('month','incurred period','service month') COMMENT = 'Incurred month.',
+    ibnr.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    ibnr.constituent AS constituent COMMENT = 'Benefit constituent.',
+    ibnr.incurred_month AS incurred_month WITH SYNONYMS ('incurred month','ibnr month') COMMENT = 'Incurred month.',
+    ibnr.lag_from_anchor AS lag_from_anchor WITH SYNONYMS ('development lag','months of runout','lag') COMMENT = 'Development lag (months from incurred to valuation anchor).',
+    ibnr.cf_source AS cf_source WITH SYNONYMS ('completion factor source','override flag') COMMENT = 'Whether the completion factor is modeled or overridden.' SAMPLE_VALUES ('MODELED','OVERRIDE') IS_ENUM,
+    reserve_method.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    reserve_method.constituent AS constituent COMMENT = 'Benefit constituent.',
+    reserve_method.incurred_month AS incurred_month COMMENT = 'Incurred month.',
+    rollforward.valuation_month AS valuation_month WITH SYNONYMS ('valuation date','close month') COMMENT = 'Valuation month of the roll-forward.',
+    rollforward.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    rollforward.constituent AS constituent COMMENT = 'Benefit constituent.',
+    ae.line_of_business AS lob WITH SYNONYMS ('lob','line of business') COMMENT = 'Line of business.',
+    ae.constituent AS constituent COMMENT = 'Benefit constituent.',
+    ae.incurred_month AS incurred_month COMMENT = 'Incurred month being restated.',
+    ae.method AS method WITH SYNONYMS ('reserving method') COMMENT = 'Reserving method used.',
+    ae.prior_valuation AS prior_valuation WITH SYNONYMS ('prior valuation date') COMMENT = 'Prior valuation anchor.',
+    ae.current_valuation AS current_valuation WITH SYNONYMS ('current valuation date') COMMENT = 'Current valuation anchor.',
+    ae.development_signal AS development_signal WITH SYNONYMS ('favorable adverse','signal') COMMENT = 'Development signal.' SAMPLE_VALUES ('ADVERSE','FAVORABLE','ON_TRACK') IS_ENUM,
+    pool.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    pool.constituent AS constituent COMMENT = 'Benefit constituent.',
+    pool.incurred_month AS incurred_month COMMENT = 'Incurred month.',
+    pool.large_claim_count AS large_claim_count WITH SYNONYMS ('number of large claims','shock claim count') COMMENT = 'Count of claimants over the pooling point.',
+    trend_decomp.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    trend_decomp.constituent AS constituent COMMENT = 'Benefit constituent.',
+    trend_decomp.service_category AS service_category WITH SYNONYMS ('category') COMMENT = 'Service category.',
+    trend_decomp.incurred_month AS incurred_month COMMENT = 'Incurred month.',
+    trend_decomp.is_mature AS is_mature WITH SYNONYMS ('mature','fully developed') COMMENT = 'Whether the month is mature enough for trend.',
+    trend_selected.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    trend_selected.constituent AS constituent COMMENT = 'Benefit constituent.',
+    trend_projection.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    trend_projection.constituent AS constituent COMMENT = 'Benefit constituent.',
+    trend_summary.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    trend_summary.constituent AS constituent COMMENT = 'Benefit constituent.',
+    trend_summary.step_seq AS step_seq COMMENT = 'Order of the build-up step.',
+    trend_summary.component AS component WITH SYNONYMS ('build-up component','trend component') COMMENT = 'Build-up component name.',
+    pricing.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    pricing.constituent AS constituent COMMENT = 'Benefit constituent.',
+    pricing.plan_year AS plan_year WITH SYNONYMS ('projection year','bid year','rating year') COMMENT = 'Plan / projection year.',
+    bidchecks.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    bidchecks.constituent AS constituent COMMENT = 'Benefit constituent.',
+    bidchecks.plan_year AS plan_year COMMENT = 'Plan / projection year.',
+    bidchecks.check_name AS check_name WITH SYNONYMS ('check','validation name') COMMENT = 'Name of the bid consistency check.',
+    bidchecks.status AS status WITH SYNONYMS ('result','pass fail') COMMENT = 'Check status.' SAMPLE_VALUES ('PASS','WARN','FAIL') IS_ENUM,
+    bidchecks.detail AS detail COMMENT = 'Human-readable detail for the check.',
+    risk.line_of_business AS line_of_business COMMENT = 'Line of business.',
+    risk.member_id AS member_id COMMENT = 'Member identifier.',
+    risk.risk_basis AS risk_basis COMMENT = 'Basis note for the derived RAF.'
+  )
+  METRICS (
+    pmpm.total_allowed AS SUM(pmpm.allowed_amt) WITH SYNONYMS ('total allowed') COMMENT = 'Total allowed amount.',
+    pmpm.total_paid AS SUM(pmpm.paid_amt) WITH SYNONYMS ('total paid') COMMENT = 'Total paid amount.',
+    pmpm.total_member_months AS SUM(pmpm.member_months) WITH SYNONYMS ('member months','exposure') COMMENT = 'Total member months.',
+    pmpm.total_units AS SUM(pmpm.service_units) COMMENT = 'Total service units.',
+    pmpm.avg_allowed_pmpm AS AVG(pmpm.allowed_pmpm) COMMENT = 'Average allowed PMPM.',
+    pmpm.avg_paid_pmpm AS AVG(pmpm.paid_pmpm) COMMENT = 'Average paid PMPM.',
+    ibnr.total_ibnr AS SUM(ibnr.ibnr) WITH SYNONYMS ('total ibnr','total reserve') COMMENT = 'Total IBNR.',
+    ibnr.total_ultimate AS SUM(ibnr.ultimate_incurred) WITH SYNONYMS ('total ultimate') COMMENT = 'Total ultimate incurred.',
+    ibnr.total_paid_to_date AS SUM(ibnr.paid_to_date) COMMENT = 'Total paid to date.',
+    ibnr.avg_completion_factor AS AVG(ibnr.completion_factor) WITH SYNONYMS ('average completion factor') COMMENT = 'Average effective completion factor.',
+    reserve_method.total_ibnr_cl AS SUM(reserve_method.ibnr) COMMENT = 'Total chain-ladder IBNR.',
+    reserve_method.total_ultimate_cl AS SUM(reserve_method.ultimate) COMMENT = 'Total chain-ladder ultimate.',
+    rollforward.total_ending_reserve AS SUM(rollforward.ending_reserve) WITH SYNONYMS ('total booked reserve') COMMENT = 'Total ending booked reserve.',
+    rollforward.total_ibnr_booked AS SUM(rollforward.ibnr_booked) COMMENT = 'Total booked IBNR.',
+    rollforward.total_reserve_vs_gl_variance AS SUM(rollforward.reserve_vs_gl_variance) COMMENT = 'Total Reserve-vs-GL tie-out variance.',
+    ae.total_development AS SUM(ae.development) WITH SYNONYMS ('total development') COMMENT = 'Total development (adverse positive).',
+    ae.avg_ae_ratio AS AVG(ae.ae_ratio) WITH SYNONYMS ('average a/e') COMMENT = 'Average actual-to-expected ratio.',
+    pool.total_pooled_excess AS SUM(pool.pooled_excess) WITH SYNONYMS ('total excess') COMMENT = 'Total pooled excess.',
+    pool.total_large_claims AS SUM(pool.large_claim_count) WITH SYNONYMS ('number of large claims') COMMENT = 'Total large-claim count.',
+    pool.avg_pooled_excess_pmpm AS AVG(pool.pooled_excess_pmpm) COMMENT = 'Average pooled excess PMPM.',
+    trend_decomp.avg_yoy_trend AS AVG(trend_decomp.yoy_trend_pct) WITH SYNONYMS ('average yoy trend') COMMENT = 'Average year-over-year trend.',
+    trend_decomp.total_util_effect AS SUM(trend_decomp.util_effect) COMMENT = 'Total utilization effect.',
+    trend_decomp.total_unitcost_effect AS SUM(trend_decomp.unitcost_effect) COMMENT = 'Total unit-cost effect.',
+    trend_selected.avg_annualized_trend AS AVG(trend_selected.annualized_trend) WITH SYNONYMS ('average trend') COMMENT = 'Average annualized trend.',
+    trend_selected.avg_freq_trend AS AVG(trend_selected.freq_trend) COMMENT = 'Average frequency trend.',
+    trend_selected.avg_severity_trend AS AVG(trend_selected.severity_trend) COMMENT = 'Average severity trend.',
+    trend_selected.avg_backtest_mape AS AVG(trend_selected.backtest_mape) COMMENT = 'Average backtest MAPE.',
+    trend_projection.avg_projected_pmpm AS AVG(trend_projection.projected_pmpm) COMMENT = 'Average projected PMPM.',
+    trend_projection.avg_base_pmpm AS AVG(trend_projection.base_pmpm) COMMENT = 'Average base PMPM.',
+    trend_summary.total_delta_pmpm AS SUM(trend_summary.delta_pmpm) COMMENT = 'Sum of build-up deltas.',
+    pricing.avg_required_pmpm AS AVG(pricing.required_pmpm_before_loads) WITH SYNONYMS ('average required pmpm') COMMENT = 'Average required PMPM before loads.',
+    pricing.avg_credibility_z AS AVG(pricing.credibility_z) COMMENT = 'Average credibility weight.',
+    pricing.avg_raf AS AVG(pricing.raf_current) COMMENT = 'Average current RAF.',
+    bidchecks.check_count AS COUNT(bidchecks.check_name) WITH SYNONYMS ('number of checks') COMMENT = 'Count of bid checks.',
+    risk.avg_risk_score AS AVG(risk.risk_score_derived) WITH SYNONYMS ('average raf') COMMENT = 'Average derived RAF.',
+    risk.member_count AS COUNT(risk.member_id) WITH SYNONYMS ('members') COMMENT = 'Count of members.',
+    risk.total_member_months AS SUM(risk.member_months) COMMENT = 'Total member months (RAF basis).'
+  )
+  COMMENT = 'Actuarial workbench semantic layer for Cortex Analyst / the derivation-trace agent: reserving (IBNR, completion, methods, roll-forward, GL tie-out, A/E), trend (decomposition, selected, projection, build-up), pricing (rate build-up, bid checks), pooling and RAF. Explain/trace only.'
+  AI_SQL_GENERATION 'This is a payer actuarial model. PMPM = amount / member months. Completion factor is fraction of ultimate paid to date; ultimate = paid-to-date / completion factor; IBNR = ultimate - paid-to-date. Trends and ratios (completion_factor, ae_ratio, yoy_trend_pct, annualized_trend, credibility_z, raf_normalization_factor) are already computed row values - average them, do not re-derive. Round PMPM and dollar amounts to 2 decimals and trend/ratio values to 4 decimals. When a question does not name a LOB or constituent, return the breakdown by those dimensions rather than a single total.'
+  AI_QUESTION_CATEGORIZATION 'Answer questions about actuarial reserving (IBNR, completion factors, reserve roll-forward, booked components, GL tie-out, actual-to-expected), trend (utilization, unit cost, mix, frequency, severity, projection), pricing (rate build-up, credibility, RAF normalization, required PMPM, MLR, bid checks), large-claim pooling and RAF. If a reserving or trend question omits line_of_business or constituent, ask the user to specify them. Decline questions unrelated to these actuarial topics.'
+  AI_VERIFIED_QUERIES (
+    q_total_ibnr AS (
+      QUESTION 'How was total IBNR derived by incurred month?'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION TRUE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT line_of_business, constituent, incurred_month, paid_to_date, completion_factor, ultimate_incurred, ibnr FROM {{ target("V_IBNR_COMPLETION") }} ORDER BY line_of_business, constituent, incurred_month'
+    ),
+    q_adverse_development AS (
+      QUESTION 'Which incurred months developed adverse and by how much?'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION TRUE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT lob, constituent, incurred_month, expected_ultimate, restated_ultimate, development, ae_ratio, development_signal FROM {{ target("V_ACTUAL_TO_EXPECTED") }} ORDER BY development DESC'
+    ),
+    q_trend_breakdown AS (
+      QUESTION 'Break down the trend into utilization, unit cost and mix.'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION TRUE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT line_of_business, constituent, step_seq, component, delta_pmpm FROM {{ target("V_TREND_SUMMARY") }} ORDER BY line_of_business, constituent, step_seq'
+    ),
+    q_category_trend AS (
+      QUESTION 'Which service category drives the trend?'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION TRUE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT line_of_business, constituent, service_category, units_per_1000, unit_cost, pmpm, yoy_trend_pct FROM {{ target("V_TREND_DECOMP") }} WHERE is_mature ORDER BY yoy_trend_pct DESC'
+    ),
+    q_required_pmpm AS (
+      QUESTION 'Trace the projected required PMPM.'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION TRUE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT line_of_business, constituent, plan_year, base_experience_pmpm, credibility_z, credibility_blended_pmpm, selected_trend, projected_pmpm, raf_normalization_factor, required_pmpm_before_loads FROM {{ target("V_PRICING_INPUT") }} ORDER BY line_of_business, constituent'
+    ),
+    q_bid_checks AS (
+      QUESTION 'Which bid checks pass or fail?'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION TRUE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT line_of_business, constituent, plan_year, check_name, status, detail FROM {{ target("V_BID_CHECKS") }} ORDER BY status, check_name'
+    ),
+    q_rollforward AS (
+      QUESTION 'Show the reserve roll-forward and the reserve versus GL tie-out.'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION FALSE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT valuation_month, line_of_business, constituent, beginning_reserve, incurred_in_period, paid_in_period, ending_reserve, derived_ibnr, reserve_vs_gl_variance, margin_over_booked_pct FROM {{ target("V_RESERVE_ROLLFORWARD") }} ORDER BY valuation_month, line_of_business, constituent'
+    ),
+    q_large_claims AS (
+      QUESTION 'How much large-claim excess is pooled by incurred month?'
+      VERIFIED_AT 1774483200
+      ONBOARDING_QUESTION FALSE
+      VERIFIED_BY '(STEWARD = actuarial_team)'
+      SQL 'SELECT line_of_business, constituent, incurred_month, large_claim_count, pooled_excess, pooled_excess_pmpm FROM {{ target("V_LARGE_CLAIM_POOL") }} WHERE large_claim_count > 0 ORDER BY pooled_excess DESC'
+    )
+  )
+  COPY GRANTS;

@@ -1,0 +1,46 @@
+CREATE OR REPLACE VIEW {{ target('V_PRICING_INPUT') }}
+  COMMENT = 'Pricing seed per LOB x constituent x plan_year: credibility-blended completed base, trended to the projection year, RAF-normalized. Derivable rows of the rate build-up (base -> credibility -> trend -> RAF-norm -> required PMPM before loads). Expense/margin/benefit loads are actuary-entered in RATE_BUILDUP. On-read.'
+AS
+WITH proj AS (
+  SELECT line_of_business, constituent, base_pmpm, selected_trend
+  FROM {{ target('V_TREND_PROJECTION') }}
+),
+manual AS (
+  SELECT constituent, AVG(base_pmpm) AS manual_pmpm FROM proj GROUP BY 1
+),
+expo AS (
+  SELECT line_of_business, SUM(member_month_fraction) AS mm12
+  FROM {{ target('DT_MEMBER_MONTHS') }}
+  WHERE eligibility_month >= DATEADD('month', -12, (SELECT MAX(eligibility_month) FROM {{ target('DT_MEMBER_MONTHS') }}))
+  GROUP BY 1
+),
+raf AS (
+  SELECT line_of_business, AVG(risk_score_derived) AS raf_current
+  FROM {{ target('DT_MEMBER_RISK_SCORE') }} GROUP BY 1
+),
+yr AS (SELECT (YEAR(MAX(incurred_month)) + {{ cfg.trend_projection_years }})::INT AS plan_year FROM {{ target('V_TREND_COMPLETED') }}),
+calc AS (
+  SELECT p.line_of_business, p.constituent, p.base_pmpm, m.manual_pmpm, p.selected_trend, r.raf_current,
+         LEAST(1, SQRT(COALESCE(e.mm12,0) / {{ cfg.full_credibility_member_months }})) AS credibility_z
+  FROM proj p
+  JOIN manual m ON m.constituent = p.constituent
+  LEFT JOIN expo e ON e.line_of_business = p.line_of_business
+  LEFT JOIN raf r  ON r.line_of_business = p.line_of_business
+),
+blend AS (
+  SELECT c.*, c.credibility_z * c.base_pmpm + (1 - c.credibility_z) * c.manual_pmpm AS credibility_blended_pmpm
+  FROM calc c
+)
+SELECT
+  b.line_of_business, b.constituent, (SELECT plan_year FROM yr) AS plan_year,
+  b.base_pmpm                                                                          AS base_experience_pmpm,
+  b.manual_pmpm,
+  b.credibility_z,
+  b.credibility_blended_pmpm,
+  b.selected_trend,
+  b.credibility_blended_pmpm * POWER(1 + COALESCE(b.selected_trend,0), {{ cfg.trend_projection_years }}) AS projected_pmpm,
+  b.raf_current,
+  {{ cfg.target_raf }} / NULLIF(b.raf_current,0)                                        AS raf_normalization_factor,
+  b.credibility_blended_pmpm * POWER(1 + COALESCE(b.selected_trend,0), {{ cfg.trend_projection_years }})
+    * ({{ cfg.target_raf }} / NULLIF(b.raf_current,0))                                  AS required_pmpm_before_loads
+FROM blend b;

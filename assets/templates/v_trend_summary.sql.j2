@@ -1,0 +1,35 @@
+CREATE OR REPLACE VIEW {{ target('V_TREND_SUMMARY') }}
+  COMMENT = 'Study trend build-up per LOB x constituent: base PMPM + component deltas (utilization, unit cost, mix/interaction, large-claim normalization) derived from V_TREND_SELECTED + V_LARGE_CLAIM_POOL. Rows are the workbench build-up bridge. On-read.'
+AS
+WITH proj AS (SELECT line_of_business, constituent, base_pmpm FROM {{ target('V_TREND_PROJECTION') }}),
+sel AS (SELECT line_of_business, constituent, annualized_trend, freq_trend, severity_trend FROM {{ target('V_TREND_SELECTED') }}),
+pool AS (
+  SELECT line_of_business, constituent, AVG(pooled_excess_pmpm) AS lc_pmpm
+  FROM {{ target('V_LARGE_CLAIM_POOL') }}
+  WHERE incurred_month >= DATEADD('month', -12, (SELECT MAX(incurred_month) FROM {{ target('V_LARGE_CLAIM_POOL') }}))
+  GROUP BY 1,2
+),
+m AS (
+  SELECT p.line_of_business, p.constituent, p.base_pmpm,
+         COALESCE(s.annualized_trend,0) AS annualized_trend,
+         COALESCE(s.freq_trend,0)       AS freq_trend,
+         COALESCE(s.severity_trend,0)   AS severity_trend,
+         COALESCE(pl.lc_pmpm,0)         AS lc_pmpm
+  FROM proj p
+  LEFT JOIN sel s   ON s.line_of_business=p.line_of_business AND s.constituent=p.constituent
+  LEFT JOIN pool pl ON pl.line_of_business=p.line_of_business AND pl.constituent=p.constituent
+)
+SELECT line_of_business, constituent, 1 AS step_seq, 'Base PMPM (trailing 12, completed)' AS component,
+       base_pmpm AS delta_pmpm, 'V_TREND_COMPLETED trailing-12 average' AS basis FROM m
+UNION ALL
+SELECT line_of_business, constituent, 2, 'Utilization',
+       base_pmpm * freq_trend, 'frequency trend x base' FROM m
+UNION ALL
+SELECT line_of_business, constituent, 3, 'Unit cost',
+       base_pmpm * severity_trend, 'severity trend x base' FROM m
+UNION ALL
+SELECT line_of_business, constituent, 4, 'Mix / severity',
+       base_pmpm * (annualized_trend - freq_trend - severity_trend), 'residual (interaction / mix)' FROM m
+UNION ALL
+SELECT line_of_business, constituent, 5, 'Large-claim normalization',
+       -lc_pmpm, 'pooled excess PMPM (trailing 12)' FROM m;

@@ -1,0 +1,61 @@
+CREATE OR REPLACE FUNCTION {{ target('TF_RESERVE_BY_METHOD') }}(
+  METHOD STRING, TAIL FLOAT, POOLING_POINT FLOAT, APRIORI_PMPM FLOAT)
+  RETURNS TABLE (line_of_business STRING, constituent STRING, incurred_month DATE,
+                 paid_to_date FLOAT, completion_factor FLOAT, ultimate FLOAT, ibnr FLOAT)
+  COMMENT = 'Deterministic reserving by method (CHAIN_LADDER | BORNHUETTER_FERGUSON | CAPE_COD) over V_CLAIM_TRIANGLE. Read-only; composable in SQL.'
+AS
+$$
+WITH tri AS (
+  SELECT line_of_business, constituent, incurred_month, dev_lag, SUM(cumulative_paid) AS cum
+  FROM {{ target('V_CLAIM_TRIANGLE') }}
+  GROUP BY 1,2,3,4
+),
+expo AS (
+  SELECT line_of_business, eligibility_month AS incurred_month, SUM(member_month_fraction) AS mm
+  FROM {{ target('DT_MEMBER_MONTHS') }} GROUP BY 1,2
+),
+ata AS (
+  SELECT a.line_of_business, a.constituent, a.dev_lag AS k,
+         SUM(b.cum) / NULLIF(SUM(a.cum),0) AS f
+  FROM tri a JOIN tri b
+    ON a.line_of_business=b.line_of_business AND a.constituent=b.constituent
+   AND a.incurred_month=b.incurred_month AND b.dev_lag = a.dev_lag + 1
+  GROUP BY 1,2,3
+),
+cdf AS (
+  SELECT line_of_business, constituent, k,
+         EXP(SUM(LN(GREATEST(f,1e-9))) OVER (PARTITION BY line_of_business, constituent
+             ORDER BY k DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) * TAIL AS cdf_to_ult
+  FROM ata
+),
+diag AS (
+  SELECT line_of_business, constituent, incurred_month,
+         MAX(dev_lag) AS latest_lag, MAX_BY(cum, dev_lag) AS paid_to_date
+  FROM tri GROUP BY 1,2,3
+),
+base AS (
+  SELECT d.*, e.mm, COALESCE(c.cdf_to_ult, TAIL) AS cdf_at_latest
+  FROM diag d
+  LEFT JOIN expo e ON e.line_of_business=d.line_of_business AND e.incurred_month=d.incurred_month
+  LEFT JOIN cdf  c ON c.line_of_business=d.line_of_business AND c.constituent=d.constituent AND c.k=d.latest_lag
+),
+cc AS (
+  SELECT line_of_business, constituent,
+         SUM(paid_to_date) / NULLIF(SUM(mm / NULLIF(cdf_at_latest,0)),0) AS cc_apriori_pmpm
+  FROM base GROUP BY 1,2
+),
+est AS (
+  SELECT b.line_of_business, b.constituent, b.incurred_month, b.paid_to_date,
+         1/NULLIF(b.cdf_at_latest,0) AS completion_factor,
+         CASE UPPER(METHOD)
+           WHEN 'BORNHUETTER_FERGUSON' THEN b.paid_to_date + (APRIORI_PMPM * b.mm) * (1 - 1/NULLIF(b.cdf_at_latest,0))
+           WHEN 'CAPE_COD'             THEN b.paid_to_date + (cc.cc_apriori_pmpm * b.mm) * (1 - 1/NULLIF(b.cdf_at_latest,0))
+           ELSE b.paid_to_date * b.cdf_at_latest
+         END AS ultimate
+  FROM base b LEFT JOIN cc ON cc.line_of_business=b.line_of_business AND cc.constituent=b.constituent
+)
+SELECT line_of_business, constituent, incurred_month,
+       paid_to_date::FLOAT AS paid_to_date, completion_factor::FLOAT AS completion_factor,
+       ultimate::FLOAT AS ultimate, GREATEST(ultimate - paid_to_date, 0)::FLOAT AS ibnr
+FROM est
+$$;

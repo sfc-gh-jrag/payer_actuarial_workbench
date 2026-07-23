@@ -1,0 +1,42 @@
+CREATE OR REPLACE VIEW {{ target('V_RESERVE_ROLLFORWARD') }}
+  COMMENT = 'Reserve roll-forward + booked-component split + Reserve-vs-GL tie-out. On-read; always current.'
+AS
+WITH gl AS (
+  SELECT {{ c('GL_VALUATION_MONTH') }} AS valuation_month,
+         {{ c('GL_LINE_OF_BUSINESS') }} AS line_of_business,
+         {{ c('GL_CONSTITUENT') }} AS constituent,
+         {{ c('GL_BOOKED_RESERVE_TOTAL') }} AS booked_reserve_total,
+         {{ c('GL_CASE_RESERVE') }} AS case_reserve,
+         {{ c('GL_IBNP_RESERVE') }} AS ibnp_reserve,
+         {{ c('GL_IBNR_BOOKED') }} AS ibnr_booked,
+         {{ c('GL_LAE_RESERVE') }} AS lae_reserve,
+         {{ c('GL_PFAD_MARGIN') }} AS pfad_margin
+  FROM {{ tbl('GL_VALUATION_MONTH') }}
+),
+paid_agg AS (
+  SELECT line_of_business, constituent, paid_month, SUM(paid_amt) AS paid_in_month
+  FROM {{ target('DT_PAID_FACT') }}
+  GROUP BY 1,2,3
+),
+derived AS (
+  SELECT line_of_business, constituent, SUM(ibnr) AS derived_ibnr
+  FROM {{ target('V_IBNR_COMPLETION') }}
+  GROUP BY 1,2
+)
+SELECT
+  g.valuation_month, g.line_of_business, g.constituent,
+  LAG(g.booked_reserve_total) OVER (PARTITION BY g.line_of_business, g.constituent ORDER BY g.valuation_month) AS beginning_reserve,
+  COALESCE(p.paid_in_month,0) AS paid_in_period,
+  g.booked_reserve_total AS ending_reserve,
+  g.booked_reserve_total
+    - LAG(g.booked_reserve_total) OVER (PARTITION BY g.line_of_business, g.constituent ORDER BY g.valuation_month)
+    + COALESCE(p.paid_in_month,0) AS incurred_in_period,
+  g.case_reserve, g.ibnp_reserve, g.ibnr_booked, g.lae_reserve, g.pfad_margin,
+  d.derived_ibnr,
+  d.derived_ibnr - g.ibnr_booked AS reserve_vs_gl_variance,
+  (d.derived_ibnr - g.ibnr_booked) / NULLIF(g.ibnr_booked,0) AS margin_over_booked_pct
+FROM gl g
+LEFT JOIN paid_agg p
+  ON p.line_of_business = g.line_of_business AND p.constituent = g.constituent AND p.paid_month = g.valuation_month
+LEFT JOIN derived d
+  ON d.line_of_business = g.line_of_business AND d.constituent = g.constituent;
