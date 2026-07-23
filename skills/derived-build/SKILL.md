@@ -10,7 +10,7 @@ Turn the approved conformance tables + accelerator templates into live objects i
 ## Preconditions
 - Phase 2 readiness gate PASSED (re-check here; refuse to build on FAIL).
 - `TARGET_DATABASE.TARGET_SCHEMA` exists and the current role can create objects in it.
-- A warehouse (`config.warehouse`, e.g. `ACT_BUILD_WH`) is available for dynamic-table refresh.
+- A warehouse (`config.warehouse`, e.g. `<YOUR_REFRESH_WAREHOUSE>`) is available for dynamic-table refresh.
 
 ## Paths & connection (set once)
 - `PLUGIN_DIR`, `WORKDIR=$(mktemp -d)`, `CONN`, `CONFIG` (as in Phase 2).

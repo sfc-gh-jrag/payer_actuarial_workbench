@@ -20,7 +20,7 @@ The workbench spans the full actuarial cycle — **Reserve** (monthly IBNR close
 ## Prerequisites
 
 - A role with CREATE DATABASE / SCHEMA / TABLE / DYNAMIC TABLE / VIEW / SEMANTIC VIEW privileges (or a pre-created target DB.SCHEMA with USAGE + CREATE).
-- A warehouse for dynamic-table refresh (`ACT_BUILD_WH` recommended).
+- A warehouse for dynamic-table refresh (set as `config.warehouse`, e.g. `<YOUR_REFRESH_WAREHOUSE>`).
 - Source **medical claims** (header with incurred **and paid** dates, line detail), **pharmacy claims** (fill + paid dates), **member-month exposure**, a **completion-factor reference**, and a **place-of-service reference**. Optional: member enrollment (RAF/benefit/funding), plan-trend assumptions, rebates, drug-price history.
 - A single **valuation anchor** (period clock). If absent, the accelerator can default to `max(paid_date)`.
 
